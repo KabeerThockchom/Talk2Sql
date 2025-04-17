@@ -42,7 +42,7 @@ Key Python dependencies include:
 - plotly - Data visualization
 - sounddevice & soundfile - Audio processing
 - openai - Azure OpenAI integration
-- groq - Speech capabilities
+- groq - text to speech and speech to text capabilities
 - python-dotenv - Environment variable management
 
 4. **Create a .env file**
@@ -112,7 +112,7 @@ python app.py
 
 Open your browser and go to:
 ```
-http://localhost:8000
+https://text2sql.fly.dev
 ```
 
 ## Features and Dashboard Pages

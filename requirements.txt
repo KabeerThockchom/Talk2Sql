@@ -5,9 +5,16 @@ numpy
 plotly
 SQLAlchemy
 pydantic
+sqlparse
 
 # Azure OpenAI
 openai
+
+# Anthropic
+anthropic
+
+# Vector database
+qdrant-client
 
 # Groq (for speech)
 groq
@@ -22,3 +29,4 @@ python-multipart
 python-dotenv
 requests
 matplotlib
+gunicorn

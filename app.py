@@ -1457,17 +1457,21 @@ def get_available_voices():
         "arabic_voices": arabic_voices
     })
 
+
+# # Serve the HTML frontend (local testing)
+# @app.route('/', defaults={'path': ''})
+# @app.route('/<path:path>')
+# def index(path):
+#     if path != "" and os.path.exists(os.path.join('local', path)):
+#         return send_file(os.path.join('dist', path))
+#     return send_file('local/index.html')
+
 # Serve the HTML frontend
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def index(path):
     if path != "" and os.path.exists(os.path.join('dist', path)):
         return send_file(os.path.join('dist', path))
-    return send_file('dist/index.html')
-
-# Create a new voice assistant interface
-@app.route('/voice')
-def voice_interface():
     return send_file('dist/index.html')
 
 # Export query history in various formats
@@ -2018,5 +2022,12 @@ def get_metrics():
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 500
 
+#prod
 if __name__ == '__main__':
-    app.run(debug=True, host='localhost', port=8000) 
+    port = int(os.environ.get("PORT", 8080))
+    app.run(debug=False, host='0.0.0.0', port=port) 
+
+#local testing
+# if __name__ == '__main__':
+#     # port = int(os.environ.get("PORT", 5000))
+#     app.run(debug=False, host='localhost', port=8000) 

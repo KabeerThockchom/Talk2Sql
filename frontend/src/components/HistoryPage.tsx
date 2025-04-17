@@ -32,7 +32,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onBack, queryClient })
   const { data, isLoading, error } = useQuery({
     queryKey: ['history'],
     queryFn: async () => {
-      const response = await axios.get('http://localhost:8000/history');
+      const response = await axios.get('https://text2sql.fly.dev/history');
       return response.data;
     }
   });
@@ -40,7 +40,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onBack, queryClient })
   // Add a mutation for rerunning queries
   const rerunMutation = useMutation({
     mutationFn: async (question: string) => {
-      const response = await axios.post('http://localhost:8000/ask', { question });
+      const response = await axios.post('https://text2sql.fly.dev/ask', { question });
       return response.data;
     },
     onSuccess: (data) => {
@@ -96,7 +96,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onBack, queryClient })
       setIsExporting(true);
       
       // Construct the URL with format and optional ID
-      let url = `http://localhost:8000/export_history?format=${format}`;
+      let url = `https://text2sql.fly.dev/export_history?format=${format}`;
       if (itemId) {
         url += `&id=${itemId}`;
       }

@@ -15,7 +15,7 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['metrics', timeRange],
     queryFn: async () => {
-      const response = await axios.get(`http://localhost:8000/metrics?time_range=${timeRange}`);
+      const response = await axios.get(`https://text2sql.fly.dev/metrics?time_range=${timeRange}`);
       return response.data;
     }
   });

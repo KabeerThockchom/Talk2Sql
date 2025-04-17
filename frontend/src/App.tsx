@@ -51,6 +51,8 @@ function App() {
   const [feedbackStatus, setFeedbackStatus] = useState<'none' | 'liked' | 'disliked'>('none');
   const [currentView, setCurrentView] = useState<'main' | 'history' | 'metrics'>('main');
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
 
   const queryClient = useQueryClient();
@@ -58,14 +60,14 @@ function App() {
   const { data: databases } = useQuery({
     queryKey: ['databases'],
     queryFn: async () => {
-      const response = await axios.get('http://localhost:8000/databases');
+      const response = await axios.get('https://text2sql.fly.dev/databases');
       return response.data;
     }
   });
 
   const askMutation = useMutation({
     mutationFn: async (question: string) => {
-      const response = await axios.post('http://localhost:8000/ask', { question });
+      const response = await axios.post('https://text2sql.fly.dev/ask', { question });
       return response.data;
     }
   });
@@ -240,11 +242,11 @@ function App() {
       setGeneratedAudio(undefined);
       
       // First, record audio
-      const recordResponse = await axios.post('http://localhost:8000/record_audio', { duration: 5 });
+      const recordResponse = await axios.post('https://text2sql.fly.dev/record_audio', { duration: 5 });
       const audioPath = recordResponse.data.audio_path;
       
       // Then, transcribe the audio
-      const transcribeResponse = await axios.post('http://localhost:8000/transcribe', { 
+      const transcribeResponse = await axios.post('https://text2sql.fly.dev/transcribe', { 
         audio_path: audioPath
       });
       
@@ -294,7 +296,7 @@ function App() {
   };
 
   const connectToDatabase = async (dbPath: string) => {
-    await axios.post('http://localhost:8000/connect', { db_path: dbPath });
+    await axios.post('https://text2sql.fly.dev/connect', { db_path: dbPath });
     setSelectedDb(dbPath);
   };
 
@@ -304,7 +306,7 @@ function App() {
     try {
       setIsGeneratingAudio(true);
       
-      const response = await axios.post('http://localhost:8000/text_to_speech', {
+      const response = await axios.post('https://text2sql.fly.dev/text_to_speech', {
         text,
         voice: 'Celeste-PlayAI' // Default voice
       });
@@ -329,7 +331,7 @@ function App() {
         const feedbackValue = type === 'liked' ? 'up' : 'down';
         
         // Send feedback to the backend
-        const response = await axios.post('http://localhost:8000/feedback', {
+        const response = await axios.post('https://text2sql.fly.dev/feedback', {
           feedback: feedbackValue,
           question: askMutation.data.question,
           sql: askMutation.data.sql
@@ -381,7 +383,7 @@ function App() {
 
   const handleCleanupDuplicates = async () => {
     try {
-      const response = await axios.post('http://localhost:8000/cleanup_duplicates');
+      const response = await axios.post('https://text2sql.fly.dev/cleanup_duplicates');
       if (response.data.status === 'success') {
         alert(`Cleaned up ${response.data.duplicates_removed} duplicates from ${response.data.files_cleaned} files.`);
       } else {
@@ -392,6 +394,54 @@ function App() {
       alert('Error cleaning up duplicates.');
     }
     setShowSettingsDropdown(false);
+  };
+
+  const uploadDatabase = async (file: File) => {
+    if (!file) return;
+
+    try {
+      setIsUploading(true);
+      
+      // Check if file is a SQLite file
+      if (!file.name.endsWith('.sqlite') && !file.name.endsWith('.db')) {
+        alert('Only .sqlite or .db files are allowed');
+        setIsUploading(false);
+        return;
+      }
+      
+      // Create form data
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      // Upload the database
+      const response = await axios.post('https://text2sql.fly.dev/upload_database', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      
+      if (response.data.status === 'success') {
+        // Refresh the database list
+        queryClient.invalidateQueries({ queryKey: ['databases'] });
+        alert(`Database ${file.name} uploaded successfully`);
+        
+        // Auto-connect to the uploaded database
+        if (response.data.path) {
+          connectToDatabase(response.data.path);
+        }
+      } else {
+        alert(`Error: ${response.data.message}`);
+      }
+    } catch (error) {
+      console.error('Error uploading database:', error);
+      alert('Failed to upload database. Please try again.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      uploadDatabase(e.target.files[0]);
+    }
   };
 
   // Render history page if that's the current view
@@ -423,10 +473,22 @@ function App() {
             <h1 className="text-lg font-semibold text-neutral-900 dark:text-white">Text2SQL</h1>
           </div>
           <Tooltip content="Upload a new database file">
-            <button className="w-full flex items-center gap-2 px-4 py-2 bg-neutral-100 dark:bg-neutral-700 rounded-lg text-neutral-600 dark:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-neutral-600 transition-colors">
-              <Upload className="w-4 h-4" />
-              <span>Upload Database</span>
-            </button>
+            <label className="w-full flex items-center gap-2 px-4 py-2 bg-neutral-100 dark:bg-neutral-700 rounded-lg text-neutral-600 dark:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-neutral-600 transition-colors cursor-pointer">
+              {isUploading ? (
+                <div className="animate-spin w-4 h-4 border-2 border-primary border-t-transparent rounded-full" />
+              ) : (
+                <Upload className="w-4 h-4" />
+              )}
+              <span>{isUploading ? 'Uploading...' : 'Upload Database'}</span>
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileChange} 
+                accept=".sqlite,.db" 
+                className="hidden" 
+                disabled={isUploading}
+              />
+            </label>
           </Tooltip>
         </div>
 
