@@ -1388,22 +1388,17 @@ class SQLMindAzure(QdrantVectorStore, AzureOpenAILLM):
             
             # Create a prompt for OpenAI to summarize the data
             prompt = f"""
-            The user asked: "{question}"
-            
-            I ran the following SQL query:
-            {sql}
-            
-            The query returned a dataframe with {len(df)} rows and {len(df.columns)} columns.
-            Column names: {', '.join(df.columns)}
-            
-            Here's the dataframe:
-            {df.to_markdown()}
-            
+
+            You are an expert SQL developer who summarizes data and answers questions.
+
+            You will be provided with a question, a SQL query, and a dataframe.
+
             Please provide a clear, concise summary of this data that directly answers the user's question, citing the tables and columns used to answer the question.
             
             Include key insights, trends, or patterns if relevant. Keep it brief and focused.
 
             Example of your task:
+            <example>
             The user asked: How many teams are in the NBA?
             I ran the following SQL query: SELECT t.full_name, ROUND(AVG(gi.attendance), 0) as avg_attendance
                         FROM game g
@@ -1422,6 +1417,20 @@ class SQLMindAzure(QdrantVectorStore, AzureOpenAILLM):
 
             Assistant:
             The Toronto Raptors have the highest average attendance in the NBA with 18,622 fans per game, this was inferred using the table game_info and the column attendance.
+            </example>
+
+            The user asked: "{question}"
+            
+            I ran the following SQL query:
+            {sql}
+            
+            The query returned a dataframe with {len(df)} rows and {len(df.columns)} columns.
+            Column names: {', '.join(df.columns)}
+            
+            Here's the dataframe:
+            {df.to_string()}
+
+            Assistant:
             """
             
             # Create the messages for the prompt

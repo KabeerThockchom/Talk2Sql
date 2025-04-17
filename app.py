@@ -1942,32 +1942,54 @@ def get_metrics():
         # Format error types for visualization
         error_analysis = [{"type": k, "count": v} for k, v in error_types.items()]
         
-        # Most common query patterns (based on simple text analysis)
+        # Most common query patterns (based on SQL analysis)
         query_patterns = {}
         for item in history:
-            question = item.get('question', '').lower()
-            pattern = 'Other'
+            sql = item.get('sql', '').lower()
+            patterns = []
             
-            # Categorize by question type
-            if question.startswith('how many'):
-                pattern = 'Count/Aggregation'
-            elif question.startswith('what is') or question.startswith('what are'):
-                pattern = 'Lookup/Definition'
-            elif question.startswith('show me') or question.startswith('list'):
-                pattern = 'Listing/Enumeration'
-            elif 'average' in question or 'mean' in question:
-                pattern = 'Average/Mean'
-            elif 'maximum' in question or 'minimum' in question or 'highest' in question or 'lowest' in question:
-                pattern = 'Min/Max'
-            elif 'group by' in question or 'grouped by' in question:
-                pattern = 'Grouping'
-            elif 'where' in question or 'filter' in question:
-                pattern = 'Filtering'
-            
-            if pattern in query_patterns:
-                query_patterns[pattern] += 1
-            else:
-                query_patterns[pattern] = 1
+            # Can match multiple patterns in a single query
+            if 'count(' in sql or 'count (' in sql:
+                patterns.append('Count')
+            if 'sum(' in sql or 'sum (' in sql:
+                patterns.append('Sum')
+            if 'avg(' in sql or 'average(' in sql or 'mean(' in sql:
+                patterns.append('Average/Mean')
+            if 'min(' in sql or 'max(' in sql:
+                patterns.append('Min/Max')
+            if 'group by' in sql:
+                patterns.append('Group By')
+            if 'order by' in sql:
+                patterns.append('Order By')
+            if 'join' in sql:
+                patterns.append('Joins')
+            if 'where' in sql:
+                patterns.append('Filtering')
+            if 'having' in sql:
+                patterns.append('Having')
+            if 'limit' in sql:
+                patterns.append('Limited Results')
+            if 'distinct' in sql:
+                patterns.append('Distinct')
+            if 'case' in sql:
+                patterns.append('Case Statements')
+            if 'subquery' in sql or (sql.count('select') > 1):
+                patterns.append('Subqueries')
+                
+            # If no specific patterns detected, classify as Simple Select
+            if not patterns and 'select' in sql:
+                patterns.append('Simple Select')
+                
+            # If still no patterns, mark as Other
+            if not patterns:
+                patterns.append('Other')
+                
+            # Count occurrences of each pattern
+            for pattern in patterns:
+                if pattern in query_patterns:
+                    query_patterns[pattern] += 1
+                else:
+                    query_patterns[pattern] = 1
                 
         query_pattern_analysis = [{"type": k, "count": v} for k, v in query_patterns.items()]
         

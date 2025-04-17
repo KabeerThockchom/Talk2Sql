@@ -77,16 +77,6 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
   ) => {
     if (!labels || !labels.length || !datasets || !datasets.length) return null;
     
-    // State to track hovered point
-    const [hoveredPoint, setHoveredPoint] = useState<{
-      x: number;
-      y: number;
-      value: number;
-      label: string;
-      datasetLabel: string;
-      color: string;
-    } | null>(null);
-    
     const height = 200;
     const width = Math.max(labels.length * 40, 300);
     const padding = { top: 20, right: 20, bottom: 30, left: 40 };
@@ -116,13 +106,7 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
     
     return (
       <div className="relative h-[200px] mt-4 overflow-hidden">
-        <svg 
-          width="100%" 
-          height={height} 
-          style={{ minWidth: width }} 
-          className="overflow-visible"
-          onMouseLeave={() => setHoveredPoint(null)}
-        >
+        <svg width="100%" height={height} style={{ minWidth: width }} className="overflow-visible">
           {/* Y-axis */}
           <line 
             x1={padding.left} 
@@ -252,80 +236,22 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
                   strokeLinejoin="round"
                 />
                 
-                {/* Points with hover interaction */}
+                {/* Points */}
                 {dataset.data.map((value, i) => {
                   if (value === undefined || value === null) return null;
-                  const x = xPositions[i];
-                  const y = scaleY(value);
-                  const label = labels[i];
-                  
                   return (
-                    <g key={i}>
-                      {/* Larger invisible circle for better hover target */}
-                      <circle 
-                        cx={x} 
-                        cy={y} 
-                        r="8" 
-                        fill="transparent"
-                        onMouseEnter={() => setHoveredPoint({
-                          x,
-                          y,
-                          value,
-                          label,
-                          datasetLabel: dataset.label,
-                          color: dataset.color
-                        })}
-                      />
-                      
-                      {/* Visible circle */}
-                      <circle 
-                        cx={x} 
-                        cy={y} 
-                        r="3" 
-                        fill={dataset.color}
-                      />
-                    </g>
+                    <circle 
+                      key={i} 
+                      cx={xPositions[i]} 
+                      cy={scaleY(value)} 
+                      r="3" 
+                      fill={dataset.color} 
+                    />
                   );
                 })}
               </React.Fragment>
             );
           })}
-          
-          {/* Tooltip */}
-          {hoveredPoint && (
-            <g>
-              {/* Tooltip background */}
-              <rect
-                x={hoveredPoint.x + 8}
-                y={hoveredPoint.y - 30}
-                width="140"
-                height="50"
-                rx="4"
-                ry="4"
-                fill="white"
-                stroke={hoveredPoint.color}
-                strokeWidth="1"
-                className="shadow-md dark:fill-neutral-800 dark:stroke-neutral-700"
-              />
-              
-              {/* Tooltip content */}
-              <text
-                x={hoveredPoint.x + 16}
-                y={hoveredPoint.y - 12}
-                className="text-[10px] fill-neutral-700 dark:fill-neutral-300 font-medium"
-              >
-                {hoveredPoint.datasetLabel}
-              </text>
-              
-              <text
-                x={hoveredPoint.x + 16}
-                y={hoveredPoint.y + 4}
-                className="text-[10px] fill-neutral-600 dark:fill-neutral-400"
-              >
-                {hoveredPoint.label}: {yAxisLabel === "Seconds" ? formatTime(hoveredPoint.value * 1000) : formatNumber(hoveredPoint.value)}
-              </text>
-            </g>
-          )}
         </svg>
         
         {/* Legend */}
