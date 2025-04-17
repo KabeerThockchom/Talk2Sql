@@ -1396,16 +1396,16 @@ class SQLMindAzure(QdrantVectorStore, AzureOpenAILLM):
             The query returned a dataframe with {len(df)} rows and {len(df.columns)} columns.
             Column names: {', '.join(df.columns)}
             
-            Here's a sample of the data:
-            {df.head(5).to_string()}
+            Here's the dataframe:
+            {df.to_markdown()}
             
             Please provide a clear, concise summary of this data that directly answers the user's question, citing the tables and columns used to answer the question.
             
             Include key insights, trends, or patterns if relevant. Keep it brief and focused.
 
             Example of your task:
-            Question: How many teams are in the NBA?
-            SQL: SELECT t.full_name, ROUND(AVG(gi.attendance), 0) as avg_attendance
+            The user asked: How many teams are in the NBA?
+            I ran the following SQL query: SELECT t.full_name, ROUND(AVG(gi.attendance), 0) as avg_attendance
                         FROM game g
                         JOIN game_info gi ON g.game_id = gi.game_id
                         JOIN team t ON g.team_id_home = t.id
@@ -1413,7 +1413,11 @@ class SQLMindAzure(QdrantVectorStore, AzureOpenAILLM):
                         GROUP BY t.id, t.full_name
                         ORDER BY avg_attendance DESC
                         LIMIT 1
-            Data:full_name	avg_attendance
+            The query returned a dataframe with 1 rows and 2 columns.
+            Column names: full_name, avg_attendance
+
+            Here's the dataframe:
+            full_name	avg_attendance
             18622	Toronto Raptors
 
             Assistant:
