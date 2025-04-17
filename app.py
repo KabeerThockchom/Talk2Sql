@@ -10,8 +10,7 @@ import numpy as np
 import base64
 import hashlib
 from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
-from talk2sql.engine import Talk2SQLAzure
-# from talk2sql.engine import Talk2SQLAnthropic
+from talk2sql.engine import Talk2SQLAnthropic
 from talk2sql.utils import format_sql_with_xml_tags, extract_content_from_xml_tags
 import groq
 import threading
@@ -31,11 +30,11 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Initialize Talk2SQLAzure with Azure OpenAI
+# Initialize Talk2SQLAzure with Anthropic, Azure OpenAI, and Qdrant
 config = {
-    # "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
-    # "claude_model": os.environ.get("CLAUDE_MODEL", "claude-3-5-haiku-20241022"),
-    # "temperature": 0.3,
+    "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
+    "claude_model": os.environ.get("CLAUDE_MODEL", "claude-3-5-haiku-20241022"),
+    "temperature": 0.3,
     # "enable_thinking": False,
     # "thinking_budget_tokens": 2000,
     "azure_api_key": os.environ.get("AZURE_OPENAI_API_KEY"),
@@ -66,8 +65,7 @@ else:
     print("Using in-memory vector storage - embeddings will be lost when app restarts")
 
 # Initialize Talk2SQL
-Talk2SQL = Talk2SQLAzure(config)
-# Talk2SQL = Talk2SQLAnthropic(config)
+Talk2SQL = Talk2SQLAnthropic(config)
 
 # Ensure query history saving is enabled
 if not Talk2SQL.save_query_history:

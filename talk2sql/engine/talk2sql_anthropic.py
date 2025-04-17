@@ -8,26 +8,28 @@ from qdrant_client.http.models import Distance, VectorParams
 import os
 
 from talk2sql.vector_store.qdrant import QdrantVectorStore
+from talk2sql.llm.anthropic import AnthropicLLM
 from talk2sql.llm.azure_openai import AzureOpenAILLM
 
-class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
+class Talk2SQLAnthropic(QdrantVectorStore, AnthropicLLM):
     """
-    Main Talk2SQL engine that combines Qdrant vector storage and Azure OpenAI capabilities.
-    This class replaces the original Anthropic implementation with Azure OpenAI services.
+    Main Talk2SQL engine that combines Qdrant vector storage, Anthropic LLM capabilities,
+    and Azure OpenAI embeddings.
     """
     
     def __init__(self, config=None):
         """
-        Initialize Talk2SQL with Azure OpenAI and Qdrant.
+        Initialize Talk2SQL with Anthropic and Qdrant, using Azure OpenAI for embeddings.
         
         Args:
-            config: Configuration dictionary with options for both QdrantVectorStore and AzureOpenAILLM
+            config: Configuration dictionary with options:
               - max_retry_attempts: Maximum number of retries for failed SQL queries (default: 3)
               - save_query_history: Whether to save query history with errors and retries (default: True)
-              - azure_api_key: Azure OpenAI API key (or use AZURE_OPENAI_API_KEY env var)
-              - azure_endpoint: Azure OpenAI endpoint (or use AZURE_ENDPOINT env var)
+              - anthropic_api_key: Anthropic API key (or use ANTHROPIC_API_KEY env var)
+              - claude_model: Claude model name (default: "claude-3-7-sonnet-20250219")
+              - azure_api_key: Azure OpenAI API key for embeddings (or use AZURE_OPENAI_API_KEY env var)
+              - azure_endpoint: Azure OpenAI endpoint for embeddings (or use AZURE_ENDPOINT env var)
               - azure_api_version: Azure API version (or use AZURE_API_VERSION env var)
-              - azure_deployment: GPT deployment name (or use AZURE_DEPLOYMENT env var)
               - azure_embedding_deployment: Embedding model name (default: "text-embedding-ada-002")
               - history_db_path: Path to SQLite database for storing query history (default: "query_history.db")
         """
@@ -39,8 +41,11 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
         # Save reference to Qdrant client before it gets overwritten
         self.qdrant_client = self.client
         
-        # Now initialize AzureOpenAILLM (which will overwrite self.client)
-        AzureOpenAILLM.__init__(self, config)
+        # Now initialize AnthropicLLM (which might overwrite self.client)
+        AnthropicLLM.__init__(self, config)
+        
+        # Set up Azure OpenAI client for embeddings
+        self._setup_azure_embedding_client(config)
         
         # Now that both clients are initialized, set up the collections
         self._setup_collections()
@@ -55,8 +60,81 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
         # Initialize query history DB
         self._init_history_db()
         
-        # SQLite connection for querying databases
+        # SQLite connection
         self.conn = None
+    
+    def _init_history_db(self):
+        """
+        Initialize the SQLite database for query history.
+        """
+        if not self.save_query_history:
+            return
+            
+        try:
+            import sqlite3
+            
+            # Connect to the history database
+            history_conn = sqlite3.connect(self.history_db_path)
+            cursor = history_conn.cursor()
+            
+            # Create table if it doesn't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS query_history (
+                    id TEXT PRIMARY KEY,
+                    timestamp TEXT,
+                    question TEXT,
+                    sql TEXT,
+                    success INTEGER,
+                    error_message TEXT,
+                    retry_count INTEGER,
+                    data BLOB,
+                    columns TEXT,
+                    visualization BLOB,
+                    summary TEXT,
+                    total_time_ms REAL,
+                    sql_generation_time_ms REAL,
+                    sql_execution_time_ms REAL,
+                    visualization_time_ms REAL,
+                    explanation_time_ms REAL,
+                    timing_details TEXT
+                )
+            ''')
+            
+            history_conn.commit()
+            history_conn.close()
+            
+            if self.debug_mode:
+                print(f"Initialized query history database at {self.history_db_path}")
+                
+        except Exception as e:
+            if self.debug_mode:
+                print(f"Error initializing query history database: {e}")
+                
+            # Fallback to in-memory storage
+            self.query_history = []
+            self.save_query_history = False
+    
+    def _setup_azure_embedding_client(self, config):
+        """Set up Azure OpenAI client for embeddings."""
+        # Get Azure OpenAI API credentials
+        self.azure_api_key = config.get("azure_api_key", os.getenv("AZURE_OPENAI_API_KEY"))
+        self.azure_endpoint = config.get("azure_endpoint", os.getenv("AZURE_ENDPOINT"))
+        self.azure_api_version = config.get("azure_api_version", os.getenv("AZURE_API_VERSION", "2024-02-15-preview"))
+        self.azure_embedding_deployment = config.get("azure_embedding_deployment", "text-embedding-ada-002")
+        
+        # Validate required parameters
+        if not self.azure_api_key:
+            raise ValueError("Azure OpenAI API key is required for embeddings. Provide in config or set AZURE_OPENAI_API_KEY env var.")
+        if not self.azure_endpoint:
+            raise ValueError("Azure OpenAI endpoint is required for embeddings. Provide in config or set AZURE_ENDPOINT env var.")
+        
+        # Initialize Azure OpenAI client for embeddings
+        from openai import AzureOpenAI
+        self.azure_client = AzureOpenAI(
+            api_key=self.azure_api_key,
+            azure_endpoint=self.azure_endpoint,
+            api_version=self.azure_api_version
+        )
     
     def connect_to_sqlite(self, db_path: str):
         """
@@ -116,6 +194,54 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
                 import traceback
                 traceback.print_exc()
             raise e
+    
+    # Override generate_embedding to use Azure OpenAI
+    def generate_embedding(self, text: str) -> List[float]:
+        """
+        Generate embedding vector for text using Azure OpenAI.
+        
+        Args:
+            text: Text to embed
+            
+        Returns:
+            List of floats representing the embedding vector
+        """
+        try:
+            # Create an embedding with Azure OpenAI
+            response = self.azure_client.embeddings.create(
+                model=self.azure_embedding_deployment,
+                input=text
+            )
+            
+            # Return the embedding
+            return response.data[0].embedding
+            
+        except Exception as e:
+            print(f"Error generating Azure OpenAI embedding: {e}")
+            # Fallback to simple embedding
+            return self._simple_embedding(text)
+    
+    def _simple_embedding(self, text: str) -> List[float]:
+        """
+        Simple fallback embedding function.
+        
+        Args:
+            text: Text to embed
+            
+        Returns:
+            Simple hash-based embedding (not for production use)
+        """
+        import hashlib
+        import numpy as np
+        
+        # Hash the text to get deterministic vector
+        text_bytes = text.encode('utf-8')
+        hash_obj = hashlib.sha256(text_bytes)
+        hash_bytes = hash_obj.digest()
+        
+        # Convert hash to list of floats
+        np.random.seed(int.from_bytes(hash_bytes[:4], byteorder='little'))
+        return np.random.normal(0, 1, 1536).tolist()
     
     # Override vector store methods to ensure they work correctly
     def add_question_sql(self, question: str, sql: str) -> str:
@@ -218,57 +344,6 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
         )
         
         return f"{point_id}-d"
-    
-    def _init_history_db(self):
-        """
-        Initialize the SQLite database for query history.
-        """
-        if not self.save_query_history:
-            return
-            
-        try:
-            import sqlite3
-            
-            # Connect to the history database
-            history_conn = sqlite3.connect(self.history_db_path)
-            cursor = history_conn.cursor()
-            
-            # Create table if it doesn't exist
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS query_history (
-                    id TEXT PRIMARY KEY,
-                    timestamp TEXT,
-                    question TEXT,
-                    sql TEXT,
-                    success INTEGER,
-                    error_message TEXT,
-                    retry_count INTEGER,
-                    data BLOB,
-                    columns TEXT,
-                    visualization BLOB,
-                    summary TEXT,
-                    total_time_ms REAL,
-                    sql_generation_time_ms REAL,
-                    sql_execution_time_ms REAL,
-                    visualization_time_ms REAL,
-                    explanation_time_ms REAL,
-                    timing_details TEXT
-                )
-            ''')
-            
-            history_conn.commit()
-            history_conn.close()
-            
-            if self.debug_mode:
-                print(f"Initialized query history database at {self.history_db_path}")
-                
-        except Exception as e:
-            if self.debug_mode:
-                print(f"Error initializing query history database: {e}")
-                
-            # Fallback to in-memory storage
-            self.query_history = []
-            self.save_query_history = False
     
     def record_query_attempt(self, question: str, sql: str, success: bool, error_message: str = None, 
                            retry_count: int = 0, data: pd.DataFrame = None, columns: List[str] = None,
@@ -496,6 +571,131 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             "common_error_types": sorted(error_types.items(), key=lambda x: x[1], reverse=True)
         }
     
+    def explain_sql(self, sql: str) -> str:
+        """
+        Generate a detailed explanation of a SQL query with additional context.
+        
+        Args:
+            sql: SQL query to explain
+            
+        Returns:
+            Natural language explanation
+        """
+        # Get related schema information if available
+        schema_info = ""
+        try:
+            # Extract table names from the SQL query to find relevant schema info
+            import re
+            tables = re.findall(r'FROM\s+([a-zA-Z0-9_]+)|JOIN\s+([a-zA-Z0-9_]+)', sql, re.IGNORECASE)
+            tables = [t[0] if t[0] else t[1] for t in tables]
+            
+            if tables and self.conn:
+                for table in tables:
+                    try:
+                        # Get schema for this table
+                        schema_df = self.run_sql(f"PRAGMA table_info({table})")
+                        if not schema_df.empty:
+                            schema_info += f"\nTable '{table}' columns: {', '.join(schema_df['name'].tolist())}\n"
+                    except:
+                        pass
+        except:
+            pass
+
+        # Create a more detailed prompt with schema info if available
+        if schema_info:
+            prompt = [
+                self.system_message(
+                    "You are an expert SQL educator. Explain SQL queries in clear, simple terms. "
+                    "Include how the query works and what it's trying to accomplish."
+                ),
+                self.user_message(
+                    f"Please explain this SQL query in simple terms:\n\n{sql}\n\n"
+                    f"Additional schema information:{schema_info}"
+                )
+            ]
+        else:
+            # Fall back to parent class behavior if no schema info
+            prompt = [
+                self.system_message("You are an expert SQL educator. Explain SQL queries in clear, simple terms."),
+                self.user_message(f"Please explain this SQL query in simple terms:\n\n{sql}")
+            ]
+        
+        return self.submit_prompt(prompt)
+    
+    def generate_follow_up_questions(self, question: str, sql: str, result_info: str, n=3) -> List[str]:
+        """
+        Generate follow-up questions based on previous query with enhanced context.
+        
+        Args:
+            question: Original question
+            sql: SQL query used
+            result_info: Information about query results
+            n: Number of follow-up questions to generate
+            
+        Returns:
+            List of follow-up questions
+        """
+        # Get database schema info to enhance follow-up relevance
+        schema_info = ""
+        try:
+            if self.conn:
+                # Get list of all tables
+                tables_df = self.run_sql("""
+                    SELECT name 
+                    FROM sqlite_master 
+                    WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                """)
+                
+                if not tables_df.empty:
+                    table_list = tables_df['name'].tolist()
+                    schema_info = f"Available tables: {', '.join(table_list)}\n\n"
+                    
+                    # Also include tables extracted from the current query
+                    import re
+                    current_tables = re.findall(r'FROM\s+([a-zA-Z0-9_]+)|JOIN\s+([a-zA-Z0-9_]+)', sql, re.IGNORECASE)
+                    current_tables = [t[0] if t[0] else t[1] for t in current_tables]
+                    
+                    for table in current_tables:
+                        if table in table_list:
+                            try:
+                                # Get column info for this table
+                                columns_df = self.run_sql(f"PRAGMA table_info({table})")
+                                if not columns_df.empty:
+                                    schema_info += f"Table '{table}' columns: {', '.join(columns_df['name'].tolist())}\n"
+                            except:
+                                pass
+        except:
+            pass
+            
+        # Add schema info to the prompt if available
+        system_msg = (
+            f"You are a data analyst helping with SQL queries. "
+            f"The user asked: '{question}'\n\n"
+            f"The SQL query used was: {sql}\n\n"
+            f"Results information: {result_info}"
+        )
+        
+        if schema_info:
+            system_msg += f"\n\nAdditional database information:\n{schema_info}"
+            
+        prompt = [
+            self.system_message(system_msg),
+            self.user_message(
+                f"Generate {n} natural follow-up questions that would be logical next steps for analysis. "
+                f"Each question should be answerable with SQL and relevant to the available database tables. "
+                f"Make questions diverse to explore different aspects of the data. "
+                f"Return only the questions, one per line."
+            )
+        ]
+        
+        response = self.submit_prompt(prompt)
+        
+        # Split into list of questions
+        questions = [q.strip() for q in response.strip().split("\n") if q.strip()]
+        
+        # Limit to n questions
+        return questions[:n]
+    
     def smart_query(self, question: str, print_results: bool = True, visualize: bool = True):
         """
         Execute a query with automatic retry mechanism and detailed reporting.
@@ -653,24 +853,24 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
                 # Generate visualization if requested
                 if visualize and df is not None and self.should_generate_visualization(df):
                     try:
-                        print(f"Attempting to generate visualization for query: '{question}'")
-                        print(f"DataFrame shape: {df.shape}")
-                        print(f"DataFrame columns: {df.columns.tolist()}")
-                        print(f"DataFrame sample:\n{df.head(3)}")
+                        if self.debug_mode:
+                            print(f"Attempting to generate visualization for query: '{question}'")
+                            print(f"DataFrame shape: {df.shape}")
+                            print(f"DataFrame columns: {df.columns.tolist()}")
+                            print(f"DataFrame sample:\n{df.head(3)}")
                         
-                        print("Generating Plotly code...")
                         timing["visualization_start"] = datetime.datetime.now()
                         plotly_code = self.generate_plotly_code(
                             question=question,
                             sql=current_sql,
                             df_metadata=f"DataFrame info: {df.dtypes}"
                         )
-                        print(f"Generated Plotly code:\n{plotly_code}")
                         
-                        print("Creating Plotly figure...")
+                        if self.debug_mode:
+                            print(f"Generated Plotly code:\n{plotly_code}")
+                        
                         fig = self.get_plotly_figure(plotly_code, df)
                         timing["visualization_end"] = datetime.datetime.now()
-                        print(f"Figure created: {fig is not None}")
                         
                         if print_results:
                             try:
@@ -682,30 +882,20 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
                                 # fig.show(config={'displayModeBar': True, 'showLink': False}, auto_open=False)
                                 pass
                     except Exception as e:
-                        print(f"Visualization error: {e}")
-                        import traceback
-                        traceback.print_exc()
-                else:
-                    if not visualize:
-                        print("Visualization is disabled")
-                    elif df is None:
-                        print("DataFrame is None, cannot visualize")
-                    else:
-                        should_vis = self.should_generate_visualization(df)
-                        print(f"should_generate_visualization returned: {should_vis}")
-                        print(f"DataFrame details - Shape: {df.shape}, Empty: {df.empty}")
-                        if not df.empty:
-                            numeric_cols = [col for col in df.columns if df[col].dtype.kind in 'ifc']
-                            print(f"Numeric columns: {numeric_cols}")
+                        if self.debug_mode:
+                            print(f"Visualization error: {e}")
+                            import traceback
+                            traceback.print_exc()
                 
                 # Generate summary
                 if df is not None and len(df) > 0:
                     try:
                         timing["explanation_start"] = datetime.datetime.now()
-                        summary = self.generate_data_summary(question, {"sql": current_sql, "data": df})
+                        summary = self.explain_results(question, df)
                         timing["explanation_end"] = datetime.datetime.now()
                     except Exception as e:
-                        print(f"Summary generation error: {e}")
+                        if self.debug_mode:
+                            print(f"Summary generation error: {e}")
                 
                 # Calculate timing information
                 timing["end_time"] = datetime.datetime.now()
@@ -1186,155 +1376,6 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             print(f"Error resetting collection: {e}")
             return False
 
-    def generate_sql(self, question: str) -> str:
-        """
-        Generate SQL query from natural language question.
-        
-        Args:
-            question: Natural language question
-            
-        Returns:
-            SQL query
-        """
-        # Get similar questions
-        similar_questions = self.get_similar_questions(question)
-        similar_questions_text = ""
-        
-        for i, q in enumerate(similar_questions, 1):
-            similar_questions_text += f"Example {i}:\nQuestion: {q['question']}\nSQL: {q['sql']}\n\n"
-            
-        # Get schema information
-        schema_info = self.get_related_schema(question)
-        schema_text = "\n".join(schema_info)
-        
-        # Get documentation
-        docs = self.get_related_documentation(question)
-        docs_text = "\n".join(docs)
-        
-        # Build prompt
-        system_content = (
-            "You are an expert SQL developer who translates natural language questions into SQL queries. "
-            "You will be provided with example questions and their SQL equivalents, database schema information, "
-            "and a question to convert to SQL."
-            "DO NOT OUTPUT ANYTHING OTHER THAN THE SQL QUERY or ANSWER ANYTHING UNRELATED TO THE DATABASE, IF YOU DO NOT KNOW THE ANSWER, DEFAULT TO CREATING QUERY TO SHOW ALL COLUMNS AND TABLES IN THE DATABASE."
-        )
-        
-        if schema_text:
-            system_content += f"\n\nDatabase Schema:\n{schema_text}"
-            
-        if docs_text:
-            system_content += f"\n\nDatabase Documentation:\n{docs_text}"
-            
-        if similar_questions_text:
-            system_content += f"\n\nExample Questions and SQL:\n{similar_questions_text}"
-        
-        prompt = [
-            self.system_message(system_content),
-            self.user_message(
-                f"Please convert the following question to a valid SQL query:\n\n{question}\n\n"
-                f"Return only the SQL query without any explanation or additional text."
-            )
-        ]
-        
-        # Get response from Azure OpenAI
-        sql = self.submit_prompt(prompt)
-        
-        # Clean up response
-        sql = sql.strip()
-        
-        # Remove markdown code block formatting if present
-        if sql.startswith("```sql"):
-            sql = sql[6:]
-        elif sql.startswith("```"):
-            sql = sql[3:]
-            
-        if sql.endswith("```"):
-            sql = sql[:-3]
-            
-        return sql.strip()
-    
-    def generate_sql_with_error_context(self, question: str, previous_sql: str, error_message: str) -> str:
-        """
-        Generate corrected SQL query based on error message.
-        
-        Args:
-            question: Natural language question
-            previous_sql: Previous SQL query that failed
-            error_message: Error message from the failed query
-            
-        Returns:
-            Corrected SQL query
-        """
-        # Get schema information
-        schema_info = self.get_related_schema(question)
-        schema_text = "\n".join(schema_info)
-        
-        # Build prompt
-        system_content = (
-            "You are an expert SQL developer tasked with fixing SQL queries. "
-            "You will be provided with a natural language question, a previous SQL query that failed, "
-            "and the error message. Your job is to correct the SQL query to make it work."
-        )
-        
-        if schema_text:
-            system_content += f"\n\nDatabase Schema:\n{schema_text}"
-        
-        prompt = [
-            self.system_message(system_content),
-            self.user_message(
-                f"Question: {question}\n\n"
-                f"Previous SQL query (with error):\n{previous_sql}\n\n"
-                f"Error message:\n{error_message}\n\n"
-                f"Please provide a corrected SQL query that addresses the error. "
-                f"Return only the SQL query without any explanation or additional text."
-            )
-        ]
-        
-        # Get response from Azure OpenAI
-        sql = self.submit_prompt(prompt)
-        
-        # Clean up response
-        sql = sql.strip()
-        
-        # Remove markdown code block formatting if present
-        if sql.startswith("```sql"):
-            sql = sql[6:]
-        elif sql.startswith("```"):
-            sql = sql[3:]
-            
-        if sql.endswith("```"):
-            sql = sql[:-3]
-            
-        return sql.strip()
-        
-    def should_generate_visualization(self, df: pd.DataFrame) -> bool:
-        """
-        Determine if visualization should be generated for the DataFrame.
-        
-        Args:
-            df: DataFrame to check
-            
-        Returns:
-            True if visualization should be generated
-        """
-        # Only visualize if auto-visualization is enabled
-        if not self.auto_visualization:
-            return False
-            
-        # Don't visualize empty DataFrames
-        if df.empty or len(df) == 0:
-            return False
-            
-        # Don't visualize DataFrames with only one row and one column
-        if df.shape == (1, 1):
-            return False
-            
-        # Check if DataFrame has numeric columns suitable for visualization
-        has_numeric = any(df[col].dtype.kind in 'ifc' for col in df.columns)
-        
-        # Minimum requirements: at least 2 rows or 2 columns, with at least one numeric column
-        return (df.shape[0] >= 2 or df.shape[1] >= 2) and has_numeric
-        
     def get_plotly_figure(self, plotly_code: str, df: pd.DataFrame) -> go.Figure:
         """
         Execute Plotly code to generate figure.
@@ -1367,11 +1408,11 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             # If execution fails, create an error figure
             fig = go.Figure(data=go.Scatter(x=[0, 1], y=[0, 1], mode="markers"))
             fig.update_layout(title=f"Error: {str(e)}")
-            return fig
+            return fig 
 
     def generate_data_summary(self, question: str, result: dict) -> str:
         """
-        Generate a summary of the data using Azure OpenAI.
+        Generate a summary of the data using Anthropic Claude.
         
         Args:
             question: The original question
@@ -1387,40 +1428,13 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             if df is None or len(df) == 0:
                 return "No data returned from the query."
             
-            # Create a prompt for OpenAI to summarize the data
-            prompt = f"""
-
-            You are an expert SQL developer who summarizes data and answers questions.
-
+            # Create a prompt for Claude to summarize the data
+            system_message = """You are an expert SQL developer who summarizes data and answers questions.
             You will be provided with a question, a SQL query, and a dataframe.
-
             Please provide a clear, concise summary of this data that directly answers the user's question, citing the tables and columns used to answer the question.
+            Include key insights, trends, or patterns if relevant. Keep it brief and focused."""
             
-            Include key insights, trends, or patterns if relevant. Keep it brief and focused.
-
-            Example of your task:
-            <example>
-            The user asked: How many teams are in the NBA?
-            I ran the following SQL query: SELECT t.full_name, ROUND(AVG(gi.attendance), 0) as avg_attendance
-                        FROM game g
-                        JOIN game_info gi ON g.game_id = gi.game_id
-                        JOIN team t ON g.team_id_home = t.id
-                        WHERE gi.attendance > 0
-                        GROUP BY t.id, t.full_name
-                        ORDER BY avg_attendance DESC
-                        LIMIT 1
-            The query returned a dataframe with 1 rows and 2 columns.
-            Column names: full_name, avg_attendance
-
-            Here's the dataframe:
-            full_name	avg_attendance
-            18622	Toronto Raptors
-
-            Assistant:
-            The Toronto Raptors have the highest average attendance in the NBA with 18,622 fans per game, this was inferred using the table game_info and the column attendance.
-            </example>
-
-            The user asked: "{question}"
+            user_message = f"""The user asked: "{question}"
             
             I ran the following SQL query:
             {sql}
@@ -1429,30 +1443,21 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             Column names: {', '.join(df.columns)}
             
             Here's the dataframe:
-            {df.to_string()}
-
-            Assistant:
-            """
+            {df.to_string()}"""
             
             # Create the messages for the prompt
-            messages = [
-                {"role": "system", "content": "You are a helpful AI that summarizes data and answers questions."},
-                {"role": "user", "content": prompt}
+            prompt = [
+                self.system_message(system_message),
+                self.user_message(user_message)
             ]
             
-            # Use the client to generate the summary
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",  # Using a default model, can be configured
-                messages=messages,
-                temperature=0.3,
-                max_tokens=400
-            )
-            
-            summary = response.choices[0].message.content
+            # Use Anthropic Claude to generate the summary
+            summary = self.submit_prompt(prompt)
             return summary
             
         except Exception as e:
-            print(f"Error generating summary: {e}")
-            import traceback
-            traceback.print_exc()
-            return "Sorry, I couldn't generate a summary of the data."
+            if self.debug_mode:
+                print(f"Error generating summary: {e}")
+                import traceback
+                traceback.print_exc()
+            return "Sorry, I couldn't generate a summary of the data." 
