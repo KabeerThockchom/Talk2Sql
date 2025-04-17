@@ -78,8 +78,9 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
     if (!labels || !labels.length || !datasets || !datasets.length) return null;
     
     const height = 200;
-    const width = Math.max(labels.length * 40, 300);
-    const padding = { top: 20, right: 20, bottom: 30, left: 40 };
+    // Ensure enough width for all labels - at least 60px per label
+    const width = Math.max(labels.length * 60, 300);
+    const padding = { top: 20, right: 20, bottom: 50, left: 40 };
     
     // Find min and max values for better scaling
     const allValues = datasets.flatMap(dataset => dataset.data || []).filter(v => v !== undefined && v !== null);
@@ -181,17 +182,14 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
           
           {/* X-axis labels - show every nth label to avoid crowding */}
           {labels.map((label, i) => {
-            // Only show every 2nd label if we have a lot of them
-            const showLabel = labels.length <= 7 || i % 2 === 0;
-            if (!showLabel) return null;
-            
+            // Always show all labels
             return (
               <text 
                 key={i} 
                 x={xPositions[i]} 
                 y={height - padding.bottom + 15} 
                 textAnchor="middle" 
-                className="text-[10px] fill-neutral-500 dark:fill-neutral-400 rotate-45"
+                className="text-[10px] fill-neutral-500 dark:text-neutral-400"
                 transform={`rotate(45, ${xPositions[i]}, ${height - padding.bottom + 15})`}
               >
                 {label}
@@ -240,13 +238,28 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
                 {dataset.data.map((value, i) => {
                   if (value === undefined || value === null) return null;
                   return (
-                    <circle 
-                      key={i} 
-                      cx={xPositions[i]} 
-                      cy={scaleY(value)} 
-                      r="3" 
-                      fill={dataset.color} 
-                    />
+                    <g key={i}>
+                      <circle 
+                        cx={xPositions[i]} 
+                        cy={scaleY(value)} 
+                        r="3" 
+                        fill={dataset.color}
+                        className="cursor-pointer"
+                        stroke="transparent"
+                        strokeWidth="1"
+                        onMouseOver={(e) => {
+                          e.currentTarget.setAttribute('r', '5');
+                          e.currentTarget.setAttribute('stroke', 'white');
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.setAttribute('r', '3');
+                          e.currentTarget.setAttribute('stroke', 'transparent');
+                        }}
+                      />
+                      <title>
+                        {labels[i]}: {formatNumber(value)} {dataset.label.split(" ").pop()}
+                      </title>
+                    </g>
                   );
                 })}
               </React.Fragment>

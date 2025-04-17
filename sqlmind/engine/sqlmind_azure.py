@@ -1216,6 +1216,7 @@ class SQLMindAzure(QdrantVectorStore, AzureOpenAILLM):
             "You are an expert SQL developer who translates natural language questions into SQL queries. "
             "You will be provided with example questions and their SQL equivalents, database schema information, "
             "and a question to convert to SQL."
+            "DO NOT OUTPUT ANYTHING OTHER THAN THE SQL QUERY or ANSWER ANYTHING UNRELATED TO THE DATABASE, IF YOU DO NOT KNOW THE ANSWER, DEFAULT TO CREATING QUERY TO SHOW ALL COLUMNS AND TABLES IN THE DATABASE."
         )
         
         if schema_text:
