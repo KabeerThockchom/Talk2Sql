@@ -1,0 +1,24 @@
+# Core dependencies
+flask
+pandas
+numpy
+plotly
+SQLAlchemy
+pydantic
+
+# Azure OpenAI
+openai
+
+# Groq (for speech)
+groq
+
+# Audio processing
+sounddevice
+soundfile
+scipy
+python-multipart
+
+# Other utilities
+python-dotenv
+requests
+matplotlib
