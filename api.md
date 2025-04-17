@@ -1,6 +1,6 @@
-# SQLMind API Documentation
+# Talk2SQL API Documentation
 
-This document outlines the REST API endpoints available in the SQLMind application for querying SQL databases using natural language.
+This document outlines the REST API endpoints available in the Talk2SQL application for querying SQL databases using natural language.
 
 ## Database Management
 

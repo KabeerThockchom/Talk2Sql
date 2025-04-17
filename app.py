@@ -10,9 +10,9 @@ import numpy as np
 import base64
 import hashlib
 from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
-from sqlmind.engine import SQLMindAzure
-# from sqlmind.engine import SQLMindAnthropic
-from sqlmind.utils import format_sql_with_xml_tags, extract_content_from_xml_tags
+from talk2sql.engine import Talk2SQLAzure
+# from talk2sql.engine import Talk2SQLAnthropic
+from talk2sql.utils import format_sql_with_xml_tags, extract_content_from_xml_tags
 import groq
 import threading
 import sqlite3
@@ -31,7 +31,7 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Initialize SQLMindAzure with Azure OpenAI
+# Initialize Talk2SQLAzure with Azure OpenAI
 config = {
     # "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
     # "claude_model": os.environ.get("CLAUDE_MODEL", "claude-3-5-haiku-20241022"),
@@ -65,14 +65,14 @@ if using_persistent_vectors:
 else:
     print("Using in-memory vector storage - embeddings will be lost when app restarts")
 
-# Initialize SQLMind
-sqlmind = SQLMindAzure(config)
-# sqlmind = SQLMindAnthropic(config)
+# Initialize Talk2SQL
+Talk2SQL = Talk2SQLAzure(config)
+# Talk2SQL = Talk2SQLAnthropic(config)
 
 # Ensure query history saving is enabled
-if not sqlmind.save_query_history:
+if not Talk2SQL.save_query_history:
     print("Enabling query history saving")
-    sqlmind.save_query_history = True
+    Talk2SQL.save_query_history = True
 
 # Initialize Groq client for speech capabilities
 groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -152,7 +152,7 @@ def connect_to_database():
             print(f"File size: {os.path.getsize(db_path)} bytes")
         
         # First connect to the database to ensure we can access it
-        sqlmind.connect_to_sqlite(db_path)
+        Talk2SQL.connect_to_sqlite(db_path)
         current_db_path = db_path
         current_db_name = os.path.basename(db_path)
         
@@ -181,9 +181,9 @@ def connect_to_database():
             collection_name = get_collection_name_for_db(db_path)
             
             # Set the collection names for this database
-            sqlmind.questions_collection = f"{collection_name}_questions"
-            sqlmind.schema_collection = f"{collection_name}_schema"
-            sqlmind.docs_collection = f"{collection_name}_docs"
+            Talk2SQL.questions_collection = f"{collection_name}_questions"
+            Talk2SQL.schema_collection = f"{collection_name}_schema"
+            Talk2SQL.docs_collection = f"{collection_name}_docs"
             
             # Check if we've already created these collections and they have data
             if db_collection_created.get(db_path, False):
@@ -195,8 +195,8 @@ def connect_to_database():
                     exists_and_has_data = False
                     try:
                         # Try to count records in the questions collection
-                        count = sqlmind.qdrant_client.count(
-                            collection_name=sqlmind.questions_collection
+                        count = Talk2SQL.qdrant_client.count(
+                            collection_name=Talk2SQL.questions_collection
                         ).count
                         exists_and_has_data = count > 0
                         if exists_and_has_data:
@@ -206,7 +206,7 @@ def connect_to_database():
                     
                     if not exists_and_has_data:
                         # Create collections if they don't exist or are empty
-                        sqlmind._setup_collections()
+                        Talk2SQL._setup_collections()
                         print(f"Created vector collections for {db_path}")
                     else:
                         print(f"Using existing collections with data for {db_path}")
@@ -280,7 +280,7 @@ def list_databases():
             })
             
         # Also check if the default NBA database exists
-        default_path = '/Users/kabeerthockchom/Desktop/sqlmind/sqlmind/nba.sqlite'
+        default_path = '/Users/kabeerthockchom/Desktop/Talk2SQL/Talk2SQL/nba.sqlite'
         if os.path.exists(default_path) and default_path not in [db['path'] for db in databases]:
             databases.append({
                 'name': 'nba.sqlite (default)',
@@ -310,7 +310,7 @@ def vector_store_status():
             })
         
         # Get list of collections
-        collections = sqlmind.qdrant_client.get_collections().collections
+        collections = Talk2SQL.qdrant_client.get_collections().collections
         collection_names = [c.name for c in collections]
         
         # Get counts for current database collections
@@ -321,7 +321,7 @@ def vector_store_status():
                 full_name = f"{collection_name}_{coll_type}"
                 if full_name in collection_names:
                     try:
-                        count = sqlmind.qdrant_client.count(
+                        count = Talk2SQL.qdrant_client.count(
                             collection_name=full_name
                         ).count
                         counts[coll_type] = count
@@ -465,7 +465,7 @@ def load_training_file(file_path):
         with open(file_path, 'r') as f:
             data = json.load(f)
             
-        # Add examples to SQLMind
+        # Add examples to Talk2SQL
         added_count = 0
         for example in data:
             question = example['natural_language']
@@ -474,10 +474,10 @@ def load_training_file(file_path):
             # Format SQL with XML tags for storage
             formatted_sql = format_sql_with_xml_tags(sql)
             
-            # Add to SQLMind
+            # Add to Talk2SQL
             try:
                 # Extract the SQL without tags for adding to the database
-                sqlmind.add_question_sql(question, sql)
+                Talk2SQL.add_question_sql(question, sql)
                 added_count += 1
             except Exception as e:
                 print(f"Error adding example: {question}, error: {e}")
@@ -541,9 +541,9 @@ def record_feedback():
             with open(feedback_path, 'w') as f:
                 json.dump(examples, f, indent=2)
             
-            # Also add to SQLMind immediately
+            # Also add to Talk2SQL immediately
             try:
-                sqlmind.add_question_sql(question, sql)
+                Talk2SQL.add_question_sql(question, sql)
                 print(f"Added feedback example to vector store: {question}")
                 
                 # Update persistent storage tracking if using Qdrant
@@ -638,7 +638,7 @@ def get_db_schema():
         
         # First, verify database connection
         try:
-            test_df = sqlmind.run_sql("SELECT 1")
+            test_df = Talk2SQL.run_sql("SELECT 1")
             print(f"Database connection test: {not test_df.empty}")
         except Exception as e:
             print(f"Database connection test failed: {e}")
@@ -646,7 +646,7 @@ def get_db_schema():
         
         # Get all tables using a more robust query
         print("Querying for tables...")
-        tables_df = sqlmind.run_sql("""
+        tables_df = Talk2SQL.run_sql("""
             SELECT name 
             FROM sqlite_master 
             WHERE type='table' AND name NOT LIKE 'sqlite_%'
@@ -668,12 +668,12 @@ def get_db_schema():
         for table in tables_df['name']:
             print(f"Processing table: {table}")
             try:
-                create_stmt_df = sqlmind.run_sql(f"SELECT sql FROM sqlite_master WHERE name='{table}'")
+                create_stmt_df = Talk2SQL.run_sql(f"SELECT sql FROM sqlite_master WHERE name='{table}'")
                 if not create_stmt_df.empty and create_stmt_df['sql'][0] is not None:
                     schema_definitions.append(create_stmt_df['sql'][0])
                     
                     # Also get a sample of the data to better understand the schema
-                    sample_df = sqlmind.run_sql(f"SELECT * FROM {table} LIMIT 1")
+                    sample_df = Talk2SQL.run_sql(f"SELECT * FROM {table} LIMIT 1")
                     columns = list(sample_df.columns)
                     schema_definitions.append(f"-- Table {table} columns: {', '.join(columns)}")
                     
@@ -682,9 +682,9 @@ def get_db_schema():
                     for col in columns:
                         try:
                             # Only get distinct values for columns (simpler approach)
-                            distinct_df = sqlmind.run_sql(f"SELECT COUNT(DISTINCT {col}) FROM {table}")
+                            distinct_df = Talk2SQL.run_sql(f"SELECT COUNT(DISTINCT {col}) FROM {table}")
                             if not distinct_df.empty and distinct_df.iloc[0, 0] < 10:
-                                values_df = sqlmind.run_sql(f"SELECT DISTINCT {col} FROM {table} LIMIT 10")
+                                values_df = Talk2SQL.run_sql(f"SELECT DISTINCT {col} FROM {table} LIMIT 10")
                                 values = values_df[values_df.columns[0]].tolist()
                                 column_info.append(f"-- Column {col} possible values: {', '.join(map(str, values))}")
                         except Exception as e:
@@ -700,15 +700,15 @@ def get_db_schema():
         # Join all schema definitions
         full_schema = '\n\n'.join(schema_definitions)
         
-        # Add schema to SQLMind
+        # Add schema to Talk2SQL
         if full_schema:
-            sqlmind.add_schema(full_schema)
+            Talk2SQL.add_schema(full_schema)
             
             # Add a more readable description
             description = f"""
             This is a database with {table_count} tables.
             """
-            sqlmind.add_documentation(description)
+            Talk2SQL.add_documentation(description)
             
         return full_schema
     except Exception as e:
@@ -717,7 +717,7 @@ def get_db_schema():
         traceback.print_exc()
         return ""
 
-# Ask question to SQLMind
+# Ask question to Talk2SQL
 @app.route('/ask', methods=['POST'])
 def ask_question():
     try:
@@ -728,19 +728,19 @@ def ask_question():
         
         # Check if we should save the query to history
         save_query = request.json.get('save_query', True)
-        original_save_query = sqlmind.save_query_history
+        original_save_query = Talk2SQL.save_query_history
         
         if not save_query:
-            sqlmind.save_query_history = False
+            Talk2SQL.save_query_history = False
         
         # Ensure database connection
         get_thread_safe_connection()
         
         # Execute the query
-        result = sqlmind.smart_query(question, print_results=False, visualize=visualize)
+        result = Talk2SQL.smart_query(question, print_results=False, visualize=visualize)
         
         # Restore save_query_history setting
-        sqlmind.save_query_history = original_save_query
+        Talk2SQL.save_query_history = original_save_query
         
         # Prepare the response
         response = {
@@ -799,7 +799,7 @@ def follow_up_questions_endpoint():
     
     try:
         # Call the generate_follow_up_questions method
-        followups = sqlmind.generate_follow_up_questions(
+        followups = Talk2SQL.generate_follow_up_questions(
             question=question,
             sql=sql,
             result_info=result_info,
@@ -863,8 +863,8 @@ def generate_data_summary(question, result):
             {"role": "user", "content": prompt}
         ]
         
-        # Use SQLMind's client (Anthropic client uses claude_model)
-        response = sqlmind.client.chat.completions.create(
+        # Use Talk2SQL's client (Anthropic client uses claude_model)
+        response = Talk2SQL.client.chat.completions.create(
             # model=config["claude_model"],
             model="gpt-4o-mini",
             messages=messages,
@@ -877,11 +877,11 @@ def generate_data_summary(question, result):
         summary_end_time = datetime.datetime.now()
         summary_time_ms = (summary_end_time - summary_start_time).total_seconds() * 1000
         # Get recent history and update with summary
-        recent_history = sqlmind.get_query_history(successful_only=True, limit=10)
+        recent_history = Talk2SQL.get_query_history(successful_only=True, limit=10)
         for entry in recent_history:
             if entry.get("question") == question and "summary" not in entry:
                 # Re-record the query attempt with the summary added
-                sqlmind.record_query_attempt(
+                Talk2SQL.record_query_attempt(
                     question=entry.get("question"),
                     sql=entry.get("sql"),
                     success=True,
@@ -906,7 +906,7 @@ def generate_data_summary(question, result):
 @app.route('/history', methods=['GET'])
 def get_history():
     try:
-        history = sqlmind.get_query_history(limit=20)
+        history = Talk2SQL.get_query_history(limit=20)
         
         # Enhance history items with additional data if available
         enhanced_history = []
@@ -950,7 +950,7 @@ def get_history():
 @app.route('/analyze', methods=['GET'])
 def analyze_patterns():
     try:
-        analysis = sqlmind.analyze_error_patterns()
+        analysis = Talk2SQL.analyze_error_patterns()
         return jsonify({"status": "success", "analysis": analysis})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
@@ -1178,14 +1178,14 @@ def voice_assistant():
                 return pd.read_sql_query(sql_query, conn)
             
             # Temporarily replace the run_sql function
-            original_run_sql = sqlmind.run_sql
-            sqlmind.run_sql = thread_safe_run_sql
+            original_run_sql = Talk2SQL.run_sql
+            Talk2SQL.run_sql = thread_safe_run_sql
             
             # Now run the query with the thread-safe function
-            result = sqlmind.smart_query(question, print_results=False, visualize=True)
+            result = Talk2SQL.smart_query(question, print_results=False, visualize=True)
             
             # Restore original function
-            sqlmind.run_sql = original_run_sql
+            Talk2SQL.run_sql = original_run_sql
         except Exception as e:
             print(f"Error in thread-safe SQL execution: {e}")
             import traceback
@@ -1328,14 +1328,14 @@ def voice_assistant_stream():
                     return pd.read_sql_query(sql_query, conn)
                 
                 # Temporarily replace the run_sql function
-                original_run_sql = sqlmind.run_sql
-                sqlmind.run_sql = thread_safe_run_sql
+                original_run_sql = Talk2SQL.run_sql
+                Talk2SQL.run_sql = thread_safe_run_sql
                 
                 # Now run the query with the thread-safe function
-                result = sqlmind.smart_query(question, print_results=False, visualize=True)
+                result = Talk2SQL.smart_query(question, print_results=False, visualize=True)
                 
                 # Restore original function
-                sqlmind.run_sql = original_run_sql
+                Talk2SQL.run_sql = original_run_sql
             except Exception as e:
                 print(f"Error in thread-safe SQL execution: {e}")
                 import traceback
@@ -1469,7 +1469,7 @@ def export_history():
         if query_id:
             # Fetch a specific query by ID
             history_to_export = []
-            recent_history = sqlmind.get_query_history()
+            recent_history = Talk2SQL.get_query_history()
             for item in recent_history:
                 if item.get('id') == query_id:
                     history_to_export = [item]
@@ -1479,7 +1479,7 @@ def export_history():
                 return jsonify({'status': 'error', 'message': f'Query with ID {query_id} not found'}), 404
         else:
             # Fetch all history
-            history_to_export = sqlmind.get_query_history()
+            history_to_export = Talk2SQL.get_query_history()
             
         if not history_to_export:
             return jsonify({'status': 'error', 'message': 'No query history found'}), 404
@@ -1809,7 +1809,7 @@ def get_metrics():
         limit = request.args.get('limit', 1000)
         
         # Get complete history
-        history = sqlmind.get_query_history(limit=limit)
+        history = Talk2SQL.get_query_history(limit=limit)
         
         # Filter by time range if needed
         if time_range != 'all':
