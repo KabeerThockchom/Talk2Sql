@@ -702,7 +702,7 @@ class SQLMindAzure(QdrantVectorStore, AzureOpenAILLM):
                 if df is not None and len(df) > 0:
                     try:
                         timing["explanation_start"] = datetime.datetime.now()
-                        summary = self.explain_results(question, df)
+                        summary = self.generate_data_summary(question, {"sql": current_sql, "data": df})
                         timing["explanation_end"] = datetime.datetime.now()
                     except Exception as e:
                         print(f"Summary generation error: {e}")
@@ -851,6 +851,7 @@ class SQLMindAzure(QdrantVectorStore, AzureOpenAILLM):
             "retry_count": metadata["retry_count"],
             "data": df,
             "visualization": fig,
+            "summary": summary,
             "metadata": metadata,
             "timing": timing_details
         }
@@ -1366,3 +1367,78 @@ class SQLMindAzure(QdrantVectorStore, AzureOpenAILLM):
             fig = go.Figure(data=go.Scatter(x=[0, 1], y=[0, 1], mode="markers"))
             fig.update_layout(title=f"Error: {str(e)}")
             return fig
+
+    def generate_data_summary(self, question: str, result: dict) -> str:
+        """
+        Generate a summary of the data using Azure OpenAI.
+        
+        Args:
+            question: The original question
+            result: Dictionary containing query results and SQL
+            
+        Returns:
+            A natural language summary of the data
+        """
+        try:
+            sql = result.get("sql", "")
+            df = result.get("data")
+            
+            if df is None or len(df) == 0:
+                return "No data returned from the query."
+            
+            # Create a prompt for OpenAI to summarize the data
+            prompt = f"""
+            The user asked: "{question}"
+            
+            I ran the following SQL query:
+            {sql}
+            
+            The query returned a dataframe with {len(df)} rows and {len(df.columns)} columns.
+            Column names: {', '.join(df.columns)}
+            
+            Here's a sample of the data:
+            {df.head(5).to_string()}
+            
+            Please provide a clear, concise summary of this data that directly answers the user's question, citing the tables and columns used to answer the question.
+            
+            Include key insights, trends, or patterns if relevant. Keep it brief and focused.
+
+            Example of your task:
+            Question: How many teams are in the NBA?
+            SQL: SELECT t.full_name, ROUND(AVG(gi.attendance), 0) as avg_attendance
+                        FROM game g
+                        JOIN game_info gi ON g.game_id = gi.game_id
+                        JOIN team t ON g.team_id_home = t.id
+                        WHERE gi.attendance > 0
+                        GROUP BY t.id, t.full_name
+                        ORDER BY avg_attendance DESC
+                        LIMIT 1
+            Data:full_name	avg_attendance
+            18622	Toronto Raptors
+
+            Assistant:
+            The Toronto Raptors have the highest average attendance in the NBA with 18,622 fans per game, this was inferred using the table game_info and the column attendance.
+            """
+            
+            # Create the messages for the prompt
+            messages = [
+                {"role": "system", "content": "You are a helpful AI that summarizes data and answers questions."},
+                {"role": "user", "content": prompt}
+            ]
+            
+            # Use the client to generate the summary
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",  # Using a default model, can be configured
+                messages=messages,
+                temperature=0.3,
+                max_tokens=400
+            )
+            
+            summary = response.choices[0].message.content
+            return summary
+            
+        except Exception as e:
+            print(f"Error generating summary: {e}")
+            import traceback
+            traceback.print_exc()
+            return "Sorry, I couldn't generate a summary of the data."

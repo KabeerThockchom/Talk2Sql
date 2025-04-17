@@ -70,21 +70,34 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
   };
 
   const renderLineChart = (
-    labels: string[], 
-    datasets: { label: string, data: number[], color: string }[]
+    labels: string[] | undefined, 
+    datasets: { label: string, data: number[], color: string }[] | undefined,
+    xAxisLabel: string = "Date",
+    yAxisLabel: string = "Value"
   ) => {
-    if (!labels || labels.length === 0) return null;
+    if (!labels || !labels.length || !datasets || !datasets.length) return null;
     
     const height = 200;
     const width = Math.max(labels.length * 40, 300);
     const padding = { top: 20, right: 20, bottom: 30, left: 40 };
     
-    // Find max value for scaling
-    const maxValue = Math.max(...datasets.flatMap(dataset => dataset.data)) * 1.1; // 10% padding
+    // Find min and max values for better scaling
+    const allValues = datasets.flatMap(dataset => dataset.data || []).filter(v => v !== undefined && v !== null);
+    const maxValue = Math.max(...allValues) * 1.1 || 1; // 10% padding, default to 1 if empty
+    const minValue = 0; // Set minimum to 0 for better visualization
     
-    // Scale values to fit in the chart
+    // Scale values to fit in the chart, ensuring proper positioning of zero values
     const scaleY = (value: number) => {
-      return height - padding.bottom - (value / maxValue) * (height - padding.top - padding.bottom);
+      // Return the bottom position for undefined/null values
+      if (value === undefined || value === null) {
+        return height - padding.bottom;
+      }
+      
+      // Calculate the vertical position based on the value's position between min and max
+      const availableHeight = height - padding.top - padding.bottom;
+      const valueRange = maxValue - minValue;
+      const normalizedValue = (value - minValue) / (valueRange === 0 ? 1 : valueRange);
+      return height - padding.bottom - (normalizedValue * availableHeight);
     };
     
     // Generate x positions
@@ -116,9 +129,31 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
             strokeWidth="1"
           />
           
+          {/* X-axis label */}
+          <text
+            x={width / 2}
+            y={height - 5}
+            textAnchor="middle"
+            className="text-[10px] fill-neutral-500 dark:fill-neutral-400"
+          >
+            {xAxisLabel}
+          </text>
+          
+          {/* Y-axis label */}
+          <text
+            x={10}
+            y={height / 2}
+            textAnchor="middle"
+            transform={`rotate(-90, 10, ${height / 2})`}
+            className="text-[10px] fill-neutral-500 dark:fill-neutral-400"
+          >
+            {yAxisLabel}
+          </text>
+          
           {/* Grid lines */}
           {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-            const y = scaleY(maxValue * ratio);
+            const value = minValue + (maxValue - minValue) * ratio;
+            const y = scaleY(value);
             return (
               <React.Fragment key={i}>
                 <line 
@@ -138,7 +173,7 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
                   dominantBaseline="middle" 
                   className="text-[10px] fill-neutral-500 dark:fill-neutral-400"
                 >
-                  {formatNumber(maxValue * (1 - ratio))}
+                  {formatNumber(value)}
                 </text>
               </React.Fragment>
             );
@@ -166,17 +201,28 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
           
           {/* Datasets */}
           {datasets.map((dataset, datasetIndex) => {
-            // Create path for the line
+            // Skip empty datasets
+            if (!dataset.data || dataset.data.length === 0) return null;
+            
+            // Create path for the line, filtering out undefined/null values
             let path = '';
+            let started = false;
+            
             dataset.data.forEach((value, i) => {
+              if (value === undefined || value === null) return;
+              
               const x = xPositions[i];
               const y = scaleY(value);
-              if (i === 0) {
+              
+              if (!started) {
                 path += `M ${x} ${y}`;
+                started = true;
               } else {
                 path += ` L ${x} ${y}`;
               }
             });
+            
+            if (!path) return null; // Skip if no valid points
             
             return (
               <React.Fragment key={datasetIndex}>
@@ -191,15 +237,18 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
                 />
                 
                 {/* Points */}
-                {dataset.data.map((value, i) => (
-                  <circle 
-                    key={i} 
-                    cx={xPositions[i]} 
-                    cy={scaleY(value)} 
-                    r="3" 
-                    fill={dataset.color} 
-                  />
-                ))}
+                {dataset.data.map((value, i) => {
+                  if (value === undefined || value === null) return null;
+                  return (
+                    <circle 
+                      key={i} 
+                      cx={xPositions[i]} 
+                      cy={scaleY(value)} 
+                      r="3" 
+                      fill={dataset.color} 
+                    />
+                  );
+                })}
               </React.Fragment>
             );
           })}
@@ -453,7 +502,7 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
                         { label: 'SQL Generation', value: data.performance_metrics.avg_sql_generation_time_ms, color: 'rgba(59, 130, 246, 0.8)' },
                         { label: 'SQL Execution', value: data.performance_metrics.avg_sql_execution_time_ms, color: 'rgba(16, 185, 129, 0.8)' },
                         { label: 'Visualization', value: data.performance_metrics.avg_visualization_time_ms, color: 'rgba(245, 158, 11, 0.8)' },
-                        { label: 'Explanation', value: data.performance_metrics.avg_explanation_time_ms, color: 'rgba(139, 92, 246, 0.8)' }
+                        { label: 'Summary', value: data.performance_metrics.avg_explanation_time_ms, color: 'rgba(139, 92, 246, 0.8)' }
                       ].map((item, index) => {
                         const totalTime = data.performance_metrics.avg_total_time_ms;
                         const percentage = totalTime > 0 ? (item.value / totalTime) * 100 : 0;
@@ -479,18 +528,20 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
                     </div>
                     
                     {/* Time series chart for performance over time */}
-                    {data.time_series.dates.length > 0 && (
+                    {data?.time_series?.dates?.length > 0 && (
                       <div className="mt-6">
-                        <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Performance Over Time</h3>
+                        <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Performance (seconds) Over Time </h3>
                         {renderLineChart(
                           data.time_series.dates,
                           [
                             { 
-                              label: 'Avg Query Time (ms)', 
-                              data: data.time_series.avg_times,
+                              label: 'Avg Query Time (seconds)', 
+                              data: data.time_series?.avg_times?.map((ms: number) => ms / 1000) || [],
                               color: 'rgba(59, 130, 246, 0.8)'
                             }
-                          ]
+                          ],
+                          "Date",
+                          "Seconds"
                         )}
                       </div>
                     )}
@@ -515,23 +566,30 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
                     ])}
                     
                     {/* Time series for success rate */}
-                    {data.time_series.dates.length > 0 && (
+                    {data?.time_series?.dates?.length > 0 && (
                       <div className="mt-6">
-                        <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Success Rate Over Time</h3>
+                        <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Success Rate (%) Over Time</h3>
                         {renderLineChart(
                           data.time_series.dates,
                           [
                             { 
                               label: 'Success Rate (%)', 
-                              data: data.time_series.success_rates,
+                              data: data.time_series?.success_rates || [],
                               color: 'rgba(16, 185, 129, 0.8)'
                             },
                             { 
                               label: 'Retries', 
-                              data: data.time_series.retries,
+                              data: data.time_series?.retries || [],
                               color: 'rgba(245, 158, 11, 0.8)'
+                            },
+                            {
+                              label: 'Failed',
+                              data: data.time_series?.failed || [],
+                              color: 'rgba(239, 68, 68, 0.8)'
                             }
-                          ]
+                          ],
+                          "Date",
+                          "Count/Percentage"
                         )}
                       </div>
                     )}
@@ -621,16 +679,18 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
                     </div>
                     
                     {/* Time series for query volume */}
-                    {data.time_series.dates.length > 0 && (
+                    {data?.time_series?.dates?.length > 0 && (
                       <div className="mt-6">
                         <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Query Volume Over Time</h3>
                         {renderLineChart(
                           data.time_series.dates,
                           [{ 
                             label: 'Queries', 
-                            data: data.time_series.counts,
+                            data: data.time_series?.counts || [],
                             color: 'rgba(139, 92, 246, 0.8)'
-                          }]
+                          }],
+                          "Date",
+                          "Count"
                         )}
                       </div>
                     )}

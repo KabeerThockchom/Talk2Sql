@@ -761,12 +761,9 @@ def ask_question():
                 response["data"] = df.to_dict(orient='records')
                 response["columns"] = df.columns.tolist()
                 
-                # Generate data summary
-                try:
-                    summary = generate_data_summary(question, result)
-                    response["summary"] = summary
-                except Exception as e:
-                    print(f"Error generating summary: {e}")
+                # The summary is already generated in smart_query and stored in the result
+                if "summary" in result:
+                    response["summary"] = result["summary"]
                 
                 # Include visualization if available
                 if result["visualization"] is not None:
@@ -788,29 +785,6 @@ def ask_question():
         import traceback
         traceback.print_exc()
         return jsonify({"status": "error", "error": str(e)})
-
-# Explain SQL query
-@app.route('/explain_sql', methods=['POST'])
-def explain_sql_endpoint():
-    sql = request.json.get('sql', '')
-    
-    if not sql:
-        return jsonify({"status": "error", "message": "No SQL query provided"})
-    
-    try:
-        # Call the explain_sql method
-        explanation = sqlmind.explain_sql(sql)
-        
-        return jsonify({
-            "status": "success",
-            "sql": sql,
-            "explanation": explanation
-        })
-    except Exception as e:
-        print(f"Error explaining SQL: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)})
 
 # Generate follow-up questions
 @app.route('/follow_up_questions', methods=['POST'])
@@ -846,6 +820,8 @@ def follow_up_questions_endpoint():
 # Generate a summary of the data using Azure OpenAI
 def generate_data_summary(question, result):
     try:
+                # Start timing
+        summary_start_time = datetime.datetime.now()
         # Create a prompt for OpenAI to summarize the data
         prompt = f"""
         The user asked: "{question}"
@@ -898,6 +874,8 @@ def generate_data_summary(question, result):
         
         summary = response.choices[0].message.content
         
+        summary_end_time = datetime.datetime.now()
+        summary_time_ms = (summary_end_time - summary_start_time).total_seconds() * 1000
         # Get recent history and update with summary
         recent_history = sqlmind.get_query_history(successful_only=True, limit=10)
         for entry in recent_history:
@@ -911,12 +889,13 @@ def generate_data_summary(question, result):
                     data=entry.get("data"),
                     columns=entry.get("columns"),
                     visualization=entry.get("visualization"),
-                    summary=summary
+                    summary=summary,
+                    explanation_time_ms=summary_time_ms
                 )
                 print(f"Added summary to query history for: '{question}'")
                 break
                 
-        return summary
+        return summary, summary_time_ms
     except Exception as e:
         print(f"Error generating summary: {e}")
         import traceback
