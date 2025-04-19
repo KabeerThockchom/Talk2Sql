@@ -2145,8 +2145,55 @@ def get_metrics():
 
         # 2️⃣ Pull history (latest first)
         history = Talk2SQL.get_query_history(limit=limit)
+        
+        # Create a default empty response that the frontend can safely render
+        default_response = {
+            "status": "success",
+            "total_queries": 0,
+            "successful_queries": 0,
+            "error_queries": 0,
+            "success_rate": 0,
+            "latency": {
+                "p50_total_ms": 0,
+                "p95_total_ms": 0,
+                "stage_p95_ms": {
+                    "generation_ms": 0,
+                    "execution_ms": 0,
+                    "visualization_ms": 0,
+                    "explanation_ms": 0,
+                },
+                "mean_breakdown_pct": {
+                    "generation_pct": 25,
+                    "execution_pct": 25,
+                    "visualization_pct": 25,
+                    "explanation_pct": 25,
+                },
+            },
+            "retry_metrics": {
+                "queries_with_retry": 0,
+                "total_retries": 0,
+                "retry_rate_pct": 0,
+                "retry_success_rate_pct": 0,
+            },
+            "memory_metrics": {
+                "queries_with_memory": 0,
+                "memory_usage_rate_pct": 0,
+                "with_memory_success_rate_pct": 0,
+                "without_memory_success_rate_pct": 0,
+            },
+            "top_errors": [],
+            "time_series": {
+                "dates": [],
+                "counts": [],
+                "success_counts": [],
+                "success_rates": [],
+                "retries": [],
+            },
+        }
+        
         if not history:
-            return jsonify({"status": "success", "message": "No query history", "total_queries": 0})
+            default_response["message"] = "No query history"
+            return jsonify(default_response)
 
         # 3️⃣ Filter by time window
         if time_range != "all":
@@ -2155,7 +2202,8 @@ def get_metrics():
             history = [item for item in history if (now - _parse_iso(item.get("timestamp", ""))).days <= delta]
 
         if not history:
-            return jsonify({"status": "success", "message": "No query history in range", "total_queries": 0})
+            default_response["message"] = "No query history in selected time range"
+            return jsonify(default_response)
 
         # Pre‑extract common lists for fast stats
         total_times = [item.get("total_time_ms", 0) for item in history if item.get("total_time_ms")]
@@ -2188,10 +2236,10 @@ def get_metrics():
         mean_expl = _mean(expl_times)
         mean_total = _mean(total_times)
         breakdown_share = {
-            "generation_pct": (mean_gen / mean_total) * 100 if mean_total else 0,
-            "execution_pct":  (mean_exec / mean_total) * 100 if mean_total else 0,
-            "visualization_pct": (mean_viz / mean_total) * 100 if mean_total else 0,
-            "explanation_pct":  (mean_expl / mean_total) * 100 if mean_total else 0,
+            "generation_pct": (mean_gen / mean_total) * 100 if mean_total else 25,
+            "execution_pct":  (mean_exec / mean_total) * 100 if mean_total else 25,
+            "visualization_pct": (mean_viz / mean_total) * 100 if mean_total else 25,
+            "explanation_pct":  (mean_expl / mean_total) * 100 if mean_total else 25,
         }
 
         # 7️⃣ Retry insights
@@ -2293,437 +2341,6 @@ def get_metrics():
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(exc)}), 500
-
-    # try:
-    #     # Get parameters
-    #     time_range = request.args.get('time_range', 'all')  # all, day, week, month
-    #     limit = request.args.get('limit', 1000)
-        
-    #     # Get complete history
-    #     history = Talk2SQL.get_query_history(limit=limit)
-        
-    #     # Filter by time range if needed
-    #     if time_range != 'all':
-    #         now = datetime.datetime.now()
-    #         filtered_history = []
-            
-    #         for item in history:
-    #             try:
-    #                 timestamp = datetime.datetime.fromisoformat(item.get('timestamp', ''))
-    #                 if time_range == 'day' and (now - timestamp).days <= 1:
-    #                     filtered_history.append(item)
-    #                 elif time_range == 'week' and (now - timestamp).days <= 7:
-    #                     filtered_history.append(item)
-    #                 elif time_range == 'month' and (now - timestamp).days <= 30:
-    #                     filtered_history.append(item)
-    #             except Exception:
-    #                 # Skip items with invalid timestamps
-    #                 pass
-            
-    #         history = filtered_history
-        
-    #     if not history:
-    #         return jsonify({
-    #             "status": "success", 
-    #             "message": "No query history available for the selected time range",
-    #             "total_queries": 0,
-    #             "successful_queries": 0,
-    #             "error_queries": 0,
-    #             "success_rate": 0,
-    #             "high_level_metrics": {
-    #                 "total_queries": 0,
-    #                 "successful_queries": 0,
-    #                 "error_queries": 0,
-    #                 "success_rate": 0,
-    #                 "avg_time_ms": 0,
-    #                 "data_returned_rate": 0
-    #             },
-    #             "retry_metrics": {
-    #                 "queries_with_retries": 0,
-    #                 "total_retries": 0,
-    #                 "retry_rate": 0,
-    #                 "avg_retries": 0,
-    #                 "successful_after_retry": 0,
-    #                 "retry_success_rate": 0,
-    #                 "retry_percentage": 0
-    #             },
-    #             "performance_metrics": {
-    #                 "avg_time_ms": 0,
-    #                 "avg_total_time_ms": 0,
-    #                 "avg_sql_generation_time_ms": 0,
-    #                 "avg_sql_execution_time_ms": 0,
-    #                 "avg_visualization_time_ms": 0,
-    #                 "avg_explanation_time_ms": 0
-    #             },
-    #             "sql_analysis": {
-    #                 "avg_sql_length": 0,
-    #                 "avg_complexity_score": 0,
-    #                 "complexity_distribution": []
-    #             },
-    #             "error_analysis": [],
-    #             "most_common_errors": [],
-    #             "query_pattern_analysis": [],
-    #             "most_common_question_types": [],
-    #             "memory_metrics": {
-    #                 "total_with_memory": 0,
-    #                 "total_without_memory": 0,
-    #                 "memory_usage_rate": 0,
-    #                 "with_memory_success_rate": 0,
-    #                 "without_memory_success_rate": 0,
-    #                 "success_rate_difference": 0
-    #             },
-    #             "complexity_metrics": {
-    #                 "avg_complexity_score": 0,
-    #                 "avg_sql_length": 0,
-    #                 "avg_result_rows": 0
-    #             },
-    #             "time_series": {
-    #                 "dates": [],
-    #                 "counts": [],
-    #                 "success_counts": [],
-    #                 "success_rates": [],
-    #                 "failed": [],
-    #                 "retries": [],
-    #                 "memory_used_count": [],
-    #                 "memory_used_success": [],
-    #                 "avg_times": []
-    #             }
-    #         })
-        
-    #     # Calculate high-level metrics
-    #     total_queries = len(history)
-    #     successful_queries = sum(1 for item in history if item.get('success', False))
-    #     error_queries = total_queries - successful_queries
-    #     success_rate = (successful_queries / total_queries) * 100 if total_queries > 0 else 0
-        
-    #     # Calculate retry metrics
-    #     queries_with_retries = sum(1 for item in history if item.get('retry_count', 0) > 0)
-    #     total_retries = sum(item.get('retry_count', 0) for item in history)
-    #     avg_retries = total_retries / queries_with_retries if queries_with_retries > 0 else 0
-    #     successful_after_retry = sum(1 for item in history if item.get('retry_count', 0) > 0 and item.get('success', False))
-    #     retry_success_rate = (successful_after_retry / queries_with_retries) * 100 if queries_with_retries > 0 else 0
-    #     retry_rate = (queries_with_retries / total_queries) * 100 if total_queries > 0 else 0
-        
-    #     # Performance metrics
-    #     performance_metrics = {
-    #         "avg_total_time_ms": statistics.mean([item.get('total_time_ms', 0) for item in history if item.get('total_time_ms')]) if any(item.get('total_time_ms') for item in history) else 0,
-    #         "avg_sql_generation_time_ms": statistics.mean([item.get('sql_generation_time_ms', 0) for item in history if item.get('sql_generation_time_ms')]) if any(item.get('sql_generation_time_ms') for item in history) else 0,
-    #         "avg_sql_execution_time_ms": statistics.mean([item.get('sql_execution_time_ms', 0) for item in history if item.get('sql_execution_time_ms')]) if any(item.get('sql_execution_time_ms') for item in history) else 0,
-    #         "avg_visualization_time_ms": statistics.mean([item.get('visualization_time_ms', 0) for item in history if item.get('visualization_time_ms')]) if any(item.get('visualization_time_ms') for item in history) else 0,
-    #         "avg_explanation_time_ms": statistics.mean([item.get('explanation_time_ms', 0) for item in history if item.get('explanation_time_ms')]) if any(item.get('explanation_time_ms') for item in history) else 0,
-    #     }
-        
-    #     # Calculate avg_time from performance_metrics
-    #     avg_time = performance_metrics["avg_total_time_ms"]
-    #     # Extract other performance metrics for direct use in the response
-    #     avg_sql_generation_time = performance_metrics["avg_sql_generation_time_ms"]
-    #     avg_sql_execution_time = performance_metrics["avg_sql_execution_time_ms"]
-    #     avg_visualization_time = performance_metrics["avg_visualization_time_ms"]
-    #     avg_explanation_time = performance_metrics["avg_explanation_time_ms"]
-        
-    #     # Count data_returned
-    #     data_returned_count = sum(1 for item in history if item.get('data') is not None and isinstance(item.get('data'), (list, pd.DataFrame)) and len(item.get('data')) > 0)
-    #     data_returned_rate = (data_returned_count / total_queries) * 100 if total_queries > 0 else 0
-        
-    #     # Helper function to convert string timestamp to date
-    #     def convert_str_to_date(timestamp_str):
-    #         try:
-    #             return datetime.datetime.fromisoformat(timestamp_str)
-    #         except (ValueError, TypeError):
-    #             # Default to now if the format is invalid
-    #             return datetime.datetime.now()
-                
-    #     # Prepare time series data
-    #     # Extract dates from history items
-    #     all_dates = [convert_str_to_date(item.get('timestamp', '')).date() for item in history if item.get('timestamp')]
-        
-    #     # Get unique dates and sort them
-    #     unique_dates = sorted(list(set(all_dates)))
-        
-    #     # If no dates are found, use an empty list
-    #     if not unique_dates:
-    #         unique_dates = []
-            
-    #     # Create date mapping for fast lookup
-    #     date_map = {date: i for i, date in enumerate(unique_dates)}
-        
-    #     # Format dates as strings for display
-    #     dates = [date.strftime('%Y-%m-%d') for date in unique_dates]
-        
-    #     # Initialize counters for each date
-    #     query_counts = [0] * len(dates)
-    #     success_counts = [0] * len(dates)
-    #     error_counts = [0] * len(dates)
-    #     retry_counts = [0] * len(dates)
-        
-    #     # Populate counters
-    #     for item in history:
-    #         try:
-    #             query_date = convert_str_to_date(item.get('timestamp', '')).date()
-    #             if query_date in date_map:
-    #                 index = date_map[query_date]
-    #                 query_counts[index] += 1
-    #                 if item.get('success', False):
-    #                     success_counts[index] += 1
-    #                 else:
-    #                     error_counts[index] += 1
-    #                 if item.get('retry_count', 0) > 0:
-    #                     retry_counts[index] += 1
-    #         except Exception:
-    #             pass
-        
-    #     # Calculate success rates for each date
-    #     success_rates = [
-    #         (success_counts[i] / query_counts[i]) * 100 if query_counts[i] > 0 else 0
-    #         for i in range(len(dates))
-    #     ]
-        
-    #     # Time series analysis
-    #     time_series = {
-    #         'dates': dates,
-    #         'counts': query_counts,
-    #         'success_counts': success_counts,
-    #         'success_rates': success_rates,
-    #         'failed': error_counts,
-    #         'retries': retry_counts,
-    #         'memory_used_count': [0] * len(dates),  # Initialize memory usage counts
-    #         'memory_used_success': [0] * len(dates)  # Initialize successful memory usage counts
-    #     }
-        
-    #     # Map data to time series
-    #     for item in history:
-    #         try:
-    #             query_date = convert_str_to_date(item.get('timestamp', '')).date()
-    #             if query_date in date_map:
-    #                 index = date_map[query_date]
-    #                 # Check for memory usage
-    #                 used_memory = item.get('used_memory', False)
-    #                 if used_memory:
-    #                     time_series['memory_used_count'][index] += 1
-    #                     if item.get('success', False):
-    #                         time_series['memory_used_success'][index] += 1
-    #         except Exception:
-    #             pass
-
-    #     # Memory usage metrics
-    #     memory_used_count = sum(1 for item in history if item.get('used_memory', False))
-    #     memory_not_used_count = total_queries - memory_used_count
-    #     memory_usage_rate = (memory_used_count / total_queries) * 100 if total_queries > 0 else 0
-        
-    #     # Success rates with and without memory
-    #     memory_success_count = sum(1 for item in history if item.get('used_memory', False) and item.get('success', False))
-    #     memory_success_rate = (memory_success_count / memory_used_count) * 100 if memory_used_count > 0 else 0
-        
-    #     no_memory_success_count = sum(1 for item in history if not item.get('used_memory', False) and item.get('success', False))
-    #     no_memory_success_rate = (no_memory_success_count / memory_not_used_count) * 100 if memory_not_used_count > 0 else 0
-
-    #     memory_metrics = {
-    #         "total_with_memory": memory_used_count,
-    #         "total_without_memory": memory_not_used_count, 
-    #         "memory_usage_rate": memory_usage_rate,
-    #         "with_memory_success_rate": memory_success_rate,
-    #         "without_memory_success_rate": no_memory_success_rate,
-    #         "success_rate_difference": memory_success_rate - no_memory_success_rate
-    #     }
-        
-    #     # SQL complexity analysis
-    #     sql_lengths = [len(item.get('sql', '')) for item in history if item.get('sql')]
-    #     avg_sql_length = statistics.mean(sql_lengths) if sql_lengths else 0
-        
-    #     # Basic SQL complexity heuristic - count of SQL keywords as a measure of complexity
-    #     sql_keywords = ['SELECT', 'FROM', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'UNION', 'INTERSECT', 'EXCEPT', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'WITH']
-    #     complexity_scores = []
-        
-    #     for item in history:
-    #         sql = item.get('sql', '')
-    #         if sql:
-    #             score = 1  # Base complexity
-    #             for keyword in sql_keywords:
-    #                 if keyword in sql.upper():
-    #                     score += 1
-    #             complexity_scores.append(score)
-        
-    #     avg_complexity = statistics.mean(complexity_scores) if complexity_scores else 0
-        
-    #     # Group queries by error type for error analysis
-    #     error_types = {}
-    #     for item in history:
-    #         if not item.get('success', True):
-    #             error_msg = item.get('error', 'Unknown error')
-    #             error_type = 'Unknown error'
-                
-    #             # Classify error types
-    #             if 'syntax error' in error_msg.lower():
-    #                 error_type = 'Syntax error'
-    #             elif 'permission' in error_msg.lower() or 'access' in error_msg.lower():
-    #                 error_type = 'Permission error'
-    #             elif 'timeout' in error_msg.lower():
-    #                 error_type = 'Timeout error'
-    #             elif 'connection' in error_msg.lower():
-    #                 error_type = 'Connection error'
-    #             elif 'table' in error_msg.lower() and ('not exist' in error_msg.lower() or 'not found' in error_msg.lower()):
-    #                 error_type = 'Table not found'
-    #             elif 'column' in error_msg.lower() and ('not exist' in error_msg.lower() or 'not found' in error_msg.lower()):
-    #                 error_type = 'Column not found'
-                
-    #             if error_type not in error_types:
-    #                 error_types[error_type] = 0
-    #             error_types[error_type] += 1
-        
-    #     error_analysis = {
-    #         'count_by_type': error_types,
-    #         'total': error_queries,
-    #         'percentage': (error_queries / total_queries) * 100 if total_queries > 0 else 0
-    #     }
-        
-    #     # Analyze query patterns
-    #     question_patterns = {}
-    #     for item in history:
-    #         question = item.get('question', '').lower()
-    #         pattern = 'Other'
-            
-    #         if any(word in question for word in ['how many', 'count']):
-    #             pattern = 'Count/How many'
-    #         elif any(word in question for word in ['average', 'avg', 'mean']):
-    #             pattern = 'Average/Mean'
-    #         elif any(word in question for word in ['sum', 'total']):
-    #             pattern = 'Sum/Total'
-    #         elif any(word in question for word in ['maximum', 'max', 'highest', 'top']):
-    #             pattern = 'Maximum/Top'
-    #         elif any(word in question for word in ['minimum', 'min', 'lowest', 'bottom']):
-    #             pattern = 'Minimum/Bottom'
-    #         elif any(word in question for word in ['list', 'show', 'display', 'give me']):
-    #             pattern = 'List/Show'
-            
-    #         if pattern not in question_patterns:
-    #             question_patterns[pattern] = 0
-    #         question_patterns[pattern] += 1
-        
-    #     # Format error types for response
-    #     error_type_counts = [{"type": k, "count": v} for k, v in error_types.items()]
-    #     most_common_errors = sorted(error_type_counts, key=lambda x: x["count"], reverse=True)[:5]
-        
-    #     # Format query patterns for response
-    #     question_type_distribution = [{"type": k, "count": v} for k, v in question_patterns.items()]
-    #     most_common_question_types = sorted(question_type_distribution, key=lambda x: x["count"], reverse=True)[:5]
-        
-    #     # Create complexity distribution
-    #     complexity_buckets = {
-    #         "Simple (1-3)": 0,
-    #         "Medium (4-6)": 0, 
-    #         "Complex (7-10)": 0,
-    #         "Very Complex (11+)": 0
-    #     }
-        
-    #     for score in complexity_scores:
-    #         if score <= 3:
-    #             complexity_buckets["Simple (1-3)"] += 1
-    #         elif score <= 6:
-    #             complexity_buckets["Medium (4-6)"] += 1
-    #         elif score <= 10:
-    #             complexity_buckets["Complex (7-10)"] += 1
-    #         else:
-    #             complexity_buckets["Very Complex (11+)"] += 1
-        
-    #     complexity_distribution = [{"type": k, "count": v} for k, v in complexity_buckets.items()]
-        
-    #     query_pattern_analysis = {
-    #         'count_by_pattern': question_patterns
-    #     }
-        
-    #     # Return formatted metrics
-    #     result = {
-    #         "total_queries": total_queries or 0,
-    #         "successful_queries": successful_queries or 0,
-    #         "error_queries": error_queries or 0,
-    #         "success_rate": success_rate or 0,
-    #         "high_level_metrics": {
-    #             "total_queries": total_queries or 0,
-    #             "successful_queries": successful_queries or 0,
-    #             "error_queries": error_queries or 0,
-    #             "success_rate": success_rate or 0,
-    #             "avg_time_ms": avg_time or 0,
-    #             "data_returned_rate": data_returned_rate or 0
-    #         },
-    #         "retry_metrics": {
-    #             "queries_with_retries": queries_with_retries or 0,
-    #             "total_retries": total_retries or 0,
-    #             "retry_rate": retry_rate or 0,
-    #             "avg_retries": avg_retries or 0,
-    #             "successful_after_retry": successful_after_retry or 0,
-    #             "retry_success_rate": retry_success_rate or 0,
-    #             "retry_percentage": (queries_with_retries / total_queries) * 100 if total_queries > 0 else 0
-    #         },
-    #         "performance_metrics": {
-    #             "avg_time_ms": avg_time or 0,
-    #             "avg_total_time_ms": avg_time or 0,
-    #             "avg_sql_generation_time_ms": avg_sql_generation_time or 0,
-    #             "avg_sql_execution_time_ms": avg_sql_execution_time or 0,
-    #             "avg_visualization_time_ms": avg_visualization_time or 0,
-    #             "avg_explanation_time_ms": avg_explanation_time or 0
-    #         },
-    #         "sql_analysis": {
-    #             "avg_sql_length": avg_sql_length or 0,
-    #             "avg_complexity_score": avg_complexity or 0,
-    #             "complexity_distribution": complexity_distribution or []
-    #         },
-    #         "error_analysis": error_type_counts or [],
-    #         "most_common_errors": most_common_errors or [],
-    #         "query_pattern_analysis": question_type_distribution or [],
-    #         "most_common_question_types": most_common_question_types or [],
-    #         "memory_metrics": memory_metrics or {
-    #             "total_with_memory": 0,
-    #             "total_without_memory": 0,
-    #             "memory_usage_rate": 0,
-    #             "with_memory_success_rate": 0,
-    #             "without_memory_success_rate": 0,
-    #             "success_rate_difference": 0
-    #         },
-    #         "complexity_metrics": {
-    #             "avg_complexity_score": avg_complexity or 0,
-    #             "avg_sql_length": avg_sql_length or 0,
-    #             "avg_result_rows": sum(
-    #                 len(item.get("data")) if isinstance(item.get("data"), list) 
-    #                 else (item.get("data").shape[0] if isinstance(item.get("data"), pd.DataFrame) and not item.get("data").empty else 0)
-    #                 for item in history if item.get("data") is not None
-    #             ) / total_queries if total_queries > 0 else 0
-    #         },
-    #         "time_series": {
-    #             "dates": dates if dates else [],
-    #             "counts": query_counts if query_counts else [],
-    #             "success_counts": success_counts if success_counts else [],
-    #             "success_rates": success_rates if success_rates else [],
-    #             "failed": error_counts if error_counts else [],
-    #             "retries": retry_counts if retry_counts else [],
-    #             "memory_used_count": time_series.get("memory_used_count", []) if time_series else [],
-    #             "memory_used_success": time_series.get("memory_used_success", []) if time_series else [],
-    #             "avg_times": [float(avg_time or 0)] * len(dates) if dates else []
-    #         }
-    #     }
-        
-    #     # Log the response for debugging
-    #     print(f"Metrics response: {json.dumps(result, default=str)}")
-
-    #     # Sanitize metrics to ensure no undefined or null values
-    #     def sanitize_metrics(obj):
-    #         if isinstance(obj, dict):
-    #             return {k: sanitize_metrics(v) for k, v in obj.items()}
-    #         elif isinstance(obj, list):
-    #             return [sanitize_metrics(item) for item in obj]
-    #         elif isinstance(obj, (int, float)):
-    #             return obj
-    #         elif obj is None:
-    #             return 0
-    #         else:
-    #             return obj
-                
-    #     # Apply sanitization
-    #     result = sanitize_metrics(result)
-
-    #     return jsonify(result)
-    # except Exception as e:
-    #     traceback.print_exc()
-    #     return jsonify({"status": "error", "message": str(e)}), 500
 
 #prod
 if __name__ == '__main__':
