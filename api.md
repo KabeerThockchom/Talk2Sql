@@ -1,414 +1,839 @@
 # Talk2SQL API Documentation
 
-This document outlines the REST API endpoints available in the Talk2SQL application for querying SQL databases using natural language.
+This document provides details and examples for the Talk2SQL API endpoints.
+
+## Table of Contents
+
+- [Database Management](#database-management)
+  - [Connect to Database](#connect-to-database)
+  - [List Databases](#list-databases)
+  - [Upload Database](#upload-database)
+  - [Vector Store Status](#vector-store-status)
+  - [Query History Status](#query-history-status)
+- [Training & Learning](#training--learning)
+  - [Upload Training Data](#upload-training-data)
+  - [Record Feedback](#record-feedback)
+  - [Cleanup Duplicates](#cleanup-duplicates)
+  - [Training Example Format](#training-example-format)
+- [Query Operations](#query-operations)
+  - [Ask Question](#ask-question)
+  - [Ask Question (Streaming)](#ask-question-streaming)
+  - [Follow-up Questions](#follow-up-questions)
+  - [Query History](#query-history)
+  - [Export History](#export-history)
+  - [Analyze Patterns](#analyze-patterns)
+  - [Metrics](#metrics)
+- [Voice Features](#voice-features)
+  - [Record Audio](#record-audio)
+  - [Upload Audio](#upload-audio)
+  - [Transcribe Audio](#transcribe-audio)
+  - [Text to Speech](#text-to-speech)
+  - [Voice Assistant](#voice-assistant)
+  - [Voice Assistant (Streaming)](#voice-assistant-streaming)
+  - [Available Voices](#available-voices)
+
+---
 
 ## Database Management
 
 ### Connect to Database
-- **URL:** `/connect`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
-    "db_path": "/path/to/database.sqlite"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "message": "Connected to /path/to/database.sqlite",
-    "schema_loaded": true,
-    "examples_loaded": true,
-    "db_name": "database.sqlite",
-    "using_persistent_vectors": true,
-    "thread_safe": true
-  }
-  ```
 
-### List Available Databases
-- **URL:** `/databases`
-- **Method:** `GET`
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "databases": [
-      {
-        "name": "database.sqlite",
-        "path": "/path/to/database.sqlite",
-        "has_persisted_vectors": true
-      }
-    ],
-    "current_db": "database.sqlite",
-    "using_persistent_vectors": true
-  }
-  ```
+Connects to a specified SQLite database.
 
-### Get Vector Store Status
-- **URL:** `/vector_store_status`
-- **Method:** `GET`
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "vector_store": "persistent",
-    "url": "https://qdrant.example.com",
-    "collections": ["collection_questions", "collection_schema", "collection_docs"],
-    "current_db_collections": {
-      "questions": 10,
-      "schema": 5,
-      "docs": 2
+**Endpoint:** `/connect`
+**Method:** `POST`
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+```json
+{
+  "db_path": "/path/to/your/database.sqlite"
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Connected to /path/to/your/database.sqlite",
+  "schema_loaded": true,
+  "examples_loaded": true,
+  "db_name": "database.sqlite",
+  "using_persistent_vectors": true,
+  "thread_safe": true
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/connect \
+  -H "Content-Type: application/json" \
+  -d '{"db_path": "/databases/query_history.sqlite"}'
+```
+/Users/kabeerthockchom/Desktop/sqlmind/databases/query_history.sqlite
+### List Databases
+
+Lists all available databases in the configured database folder.
+
+**Endpoint:** `/databases`
+**Method:** `GET`
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "databases": [
+    {
+      "name": "database1.sqlite",
+      "path": "/path/to/database1.sqlite",
+      "has_persisted_vectors": true,
+      "is_query_history": false
+    },
+    {
+      "name": "database2.sqlite",
+      "path": "/path/to/database2.sqlite",
+      "has_persisted_vectors": false,
+      "is_query_history": false
     }
-  }
-  ```
+  ],
+  "current_db": "database1.sqlite",
+  "using_persistent_vectors": true
+}
+```
 
-### Upload Database File
-- **URL:** `/upload_database`
-- **Method:** `POST`
-- **Body:** Form data with "file" field containing a .sqlite or .db file
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "message": "Database example.sqlite uploaded successfully",
-    "path": "/path/to/databases/example.sqlite"
-  }
-  ```
+**Example:**
 
-## Training Data Management
+```bash
+curl -X GET http://localhost:8080/databases
+```
+
+### Upload Database
+
+Uploads a new SQLite database file.
+
+**Endpoint:** `/upload_database`
+**Method:** `POST`
+**Content-Type:** `multipart/form-data`
+
+**Request Parameters:**
+- `file`: The SQLite database file to upload (.sqlite or .db)
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Database example.sqlite uploaded successfully",
+  "path": "/path/to/databases/example.sqlite"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/upload_database \
+  -F "file=@/local/path/to/example.sqlite"
+```
+
+### Vector Store Status
+
+Gets the status of the Qdrant vector store (for admin purposes).
+
+**Endpoint:** `/vector_store_status`
+**Method:** `GET`
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "vector_store": "persistent",
+  "url": "https://your-qdrant-instance.cloud",
+  "collections": ["db1_questions", "db1_schema", "db1_docs"],
+  "current_db_collections": {
+    "questions": 50,
+    "schema": 10,
+    "docs": 25
+  }
+}
+```
+
+**Example:**
+
+```bash
+curl -X GET http://localhost:8080/vector_store_status
+```
+
+### Query History Status
+
+Checks the status of the query history database.
+
+**Endpoint:** `/query_history_status`
+**Method:** `GET`
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "query_history_path": "/path/to/databases/query_history.sqlite",
+  "exists": true,
+  "in_databases_folder": true,
+  "file_info": {
+    "size_bytes": 1024000,
+    "created": "2023-05-10T12:34:56",
+    "modified": "2023-05-15T09:12:34",
+    "query_count": 150
+  }
+}
+```
+
+**Example:**
+
+```bash
+curl -X GET http://localhost:8080/query_history_status
+```
+
+---
+
+## Training & Learning
 
 ### Upload Training Data
-- **URL:** `/upload_training_data`
-- **Method:** `POST`
-- **Body:** Form data with "file" field containing a .json file of training examples
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "message": "Training data examples.json uploaded successfully",
-    "examples_loaded": true,
-    "path": "/path/to/training_data/database_training.json"
-  }
-  ```
 
-### Record User Feedback
-- **URL:** `/feedback`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
-    "feedback": "up",  // or "down"
-    "question": "How many teams are in the NBA?",
-    "sql": "SELECT COUNT(*) FROM teams"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "message": "Feedback recorded and added to training examples",
+Uploads a JSON file containing training examples for the current database.
+
+**Endpoint:** `/upload_training_data`
+**Method:** `POST`
+**Content-Type:** `multipart/form-data`
+
+**Request Parameters:**
+- `file`: The JSON file containing training examples
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Training data examples.json uploaded successfully",
+  "examples_loaded": true,
+  "path": "/path/to/training_data/database_training.json"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/upload_training_data \
+  -F "file=@/local/path/to/examples.json"
+```
+
+### Record Feedback
+
+Records user feedback (thumbs up/down) on query results.
+
+**Endpoint:** `/feedback`
+**Method:** `POST`
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+```json
+{
+  "feedback": "up",
+  "question": "How many users registered in January?",
+  "sql": "SELECT COUNT(*) FROM users WHERE strftime('%m', registration_date) = '01'"
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Feedback recorded and added to training examples",
+  "feedback": "up",
+  "stored_in_vectors": true
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/feedback \
+  -H "Content-Type: application/json" \
+  -d '{
     "feedback": "up",
-    "stored_in_vectors": true
-  }
-  ```
+    "question": "How many users registered in January?",
+    "sql": "SELECT COUNT(*) FROM users WHERE strftime('\''%m'\'', registration_date) = '\''01'\''"
+  }'
+```
 
-### Cleanup Duplicate Training Examples
-- **URL:** `/cleanup_duplicates`
-- **Method:** `POST`
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "message": "Removed 5 duplicate entries from 2 files",
-    "duplicates_removed": 5,
-    "files_cleaned": 2
-  }
-  ```
+### Cleanup Duplicates
 
-### Get Training Example Format
-- **URL:** `/training_example_format`
-- **Method:** `GET`
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "example_format": {
-      "natural_language": "How many teams are in the NBA?",
-      "sql": "SELECT COUNT(*) as team_count FROM team LIMIT 1",
-      "type": "counting"
-    },
-    "instructions": "To create your own training data..."
-  }
-  ```
+Removes duplicate entries from feedback and training files.
 
-## Query Management
+**Endpoint:** `/cleanup_duplicates`
+**Method:** `POST`
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Removed 5 duplicate entries from 2 files",
+  "duplicates_removed": 5,
+  "files_cleaned": 2
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/cleanup_duplicates
+```
+
+### Training Example Format
+
+Gets the expected format for training examples.
+
+**Endpoint:** `/training_example_format`
+**Method:** `GET`
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "example_format": {
+    "natural_language": "How many teams are in the NBA?",
+    "sql": "SELECT COUNT(*) as team_count FROM team LIMIT 1",
+    "type": "counting"
+  },
+  "instructions": "To create your own training data:\n1. Create a JSON file with an array of examples\n2. Each example should have 'natural_language' and 'sql' fields\n3. The 'type' field is optional and can be used for categorization\n4. Upload the file to add examples to the system"
+}
+```
+
+**Example:**
+
+```bash
+curl -X GET http://localhost:8080/training_example_format
+```
+
+---
+
+## Query Operations
 
 ### Ask Question
-- **URL:** `/ask`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
-    "question": "How many teams are in the NBA?",
-    "db_id": "nba.sqlite",
-    "visualize": true,
-    "save_query": true
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "sql": "SELECT COUNT(*) as team_count FROM team LIMIT 1",
-    "retry_count": 0,
-    "question": "How many teams are in the NBA?",
-    "timing": { ... },
-    "data": [{"team_count": 30}],
-    "columns": ["team_count"],
-    "summary": "There are 30 teams in the NBA...",
-    "visualization": "..."
-  }
-  ```
 
-### Explain SQL Query
-- **URL:** `/explain_sql`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
-    "sql": "SELECT COUNT(*) as team_count FROM team LIMIT 1"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "sql": "SELECT COUNT(*) as team_count FROM team LIMIT 1",
-    "explanation": "This query counts the number of rows in the 'team' table..."
-  }
-  ```
+Asks a natural language question to be converted to SQL and executed.
 
-### Generate Follow-up Questions
-- **URL:** `/follow_up_questions`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
-    "question": "How many teams are in the NBA?",
-    "sql": "SELECT COUNT(*) as team_count FROM team LIMIT 1",
-    "result_info": "The query returned 30 teams",
+**Endpoint:** `/ask`
+**Method:** `POST`
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+```json
+{
+  "question": "How many users registered last month?",
+  "db_id": "users.sqlite",
+  "visualize": true,
+  "save_query": true
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "sql": "SELECT COUNT(*) AS user_count FROM users WHERE strftime('%Y-%m', registration_date) = strftime('%Y-%m', 'now', '-1 month')",
+  "retry_count": 0,
+  "question": "How many users registered last month?",
+  "used_memory": false,
+  "timing": {
+    "total_time_ms": 1250,
+    "sql_generation_time_ms": 950,
+    "sql_execution_time_ms": 250,
+    "visualization_time_ms": 50
+  },
+  "data": [{"user_count": 156}],
+  "columns": ["user_count"],
+  "summary": "There were 156 users who registered last month according to the database."
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "How many users registered last month?",
+    "db_id": "users.sqlite",
+    "visualize": true
+  }'
+```
+
+### Ask Question (Streaming)
+
+Streaming version of the ask endpoint that returns results in real-time.
+
+**Endpoint:** `/ask_stream`
+**Method:** `GET`
+
+**Query Parameters:**
+- `question`: The natural language question to ask
+
+**Response:**
+Server-sent events stream with the following event types:
+- `question`: Acknowledges receipt of question
+- `sql`: Generated SQL query
+- `data`: Query results
+- `visualization`: Visualization data (if available)
+- `summary`: Text summary of the results
+- `followups`: Suggested follow-up questions
+- `error`: Error message (if something goes wrong)
+- `complete`: Signals the end of the response
+
+**Example:**
+
+```bash
+curl -X GET "http://localhost:8080/ask_stream?question=How%20many%20users%20registered%20last%20month?"
+```
+
+### Follow-up Questions
+
+Generates follow-up questions based on a previous query.
+
+**Endpoint:** `/follow_up_questions`
+**Method:** `POST`
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+```json
+{
+  "question": "How many users registered last month?",
+  "sql": "SELECT COUNT(*) AS user_count FROM users WHERE strftime('%Y-%m', registration_date) = strftime('%Y-%m', 'now', '-1 month')",
+  "result_info": "There were 156 users who registered last month.",
+  "n": 3
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "question": "How many users registered last month?",
+  "followup_questions": [
+    "How does this compare to user registrations from the previous month?",
+    "What was the daily average of user registrations last month?",
+    "Which days of the week had the most registrations last month?"
+  ]
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/follow_up_questions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "How many users registered last month?",
+    "sql": "SELECT COUNT(*) AS user_count FROM users WHERE strftime('\''%Y-%m'\'', registration_date) = strftime('\''%Y-%m'\'', '\''now'\'', '\''-1 month'\'')",
+    "result_info": "There were 156 users who registered last month.",
     "n": 3
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "question": "How many teams are in the NBA?",
-    "followup_questions": [
-      "Which conference has more teams, Eastern or Western?",
-      "When was the most recent team added to the NBA?",
-      "Which NBA team has won the most championships?"
-    ]
-  }
-  ```
+  }'
+```
 
-### Get Query History
-- **URL:** `/history`
-- **Method:** `GET`
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "history": [
+### Query History
+
+Gets the history of executed queries.
+
+**Endpoint:** `/history`
+**Method:** `GET`
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "history": [
+    {
+      "id": "query_123",
+      "question": "How many users registered last month?",
+      "sql": "SELECT COUNT(*) AS user_count FROM users WHERE strftime('%Y-%m', registration_date) = strftime('%Y-%m', 'now', '-1 month')",
+      "timestamp": "2023-05-15T10:23:45",
+      "success": true,
+      "used_memory": false,
+      "total_time_ms": 1250,
+      "sql_generation_time_ms": 950,
+      "sql_execution_time_ms": 250,
+      "visualization_time_ms": 50,
+      "explanation_time_ms": 150,
+      "data": [{"user_count": 156}],
+      "columns": ["user_count"],
+      "visualization": "{\"data\":[{\"type\":\"bar\",\"x\":[\"Last Month\"],\"y\":[156]}]}",
+      "summary": "There were 156 users who registered last month."
+    }
+  ]
+}
+```
+
+**Example:**
+
+```bash
+curl -X GET http://localhost:8080/history
+```
+
+### Export History
+
+Exports query history in various formats (JSON, CSV, or full CSV ZIP).
+
+**Endpoint:** `/export_history`
+**Method:** `GET`
+
+**Query Parameters:**
+- `format`: Export format (`json`, `csv`, or `full_csv`)
+- `id` (optional): ID of a specific query to export
+
+**Response:**
+- For `json`: JSON data
+- For `csv` or `full_csv`: ZIP file download
+
+**Example:**
+
+```bash
+# Export all history as JSON
+curl -X GET "http://localhost:8080/export_history?format=json"
+
+# Export a specific query as CSV
+curl -X GET "http://localhost:8080/export_history?format=csv&id=query_123"
+
+# Export comprehensive history data
+curl -X GET "http://localhost:8080/export_history?format=full_csv"
+```
+
+### Analyze Patterns
+
+Analyzes query patterns and error trends.
+
+**Endpoint:** `/analyze`
+**Method:** `GET`
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "analysis": {
+    "error_patterns": [
       {
-        "id": "unique_id",
-        "question": "How many teams are in the NBA?",
-        "sql": "SELECT COUNT(*) as team_count FROM team LIMIT 1",
-        "timestamp": "2023-04-01T12:00:00",
-        "success": true,
-        "data": [{"team_count": 30}],
-        "columns": ["team_count"],
-        "visualization": "...",
-        "summary": "There are 30 teams in the NBA..."
+        "error_type": "syntax_error",
+        "count": 15,
+        "percentage": 7.5
+      },
+      {
+        "error_type": "table_not_found",
+        "count": 8,
+        "percentage": 4.0
+      }
+    ],
+    "common_questions": [
+      {
+        "pattern": "count_records",
+        "examples": ["How many users", "Count the total"],
+        "percentage": 30.0
       }
     ]
   }
-  ```
+}
+```
 
-### Analyze Query Patterns
-- **URL:** `/analyze`
-- **Method:** `GET`
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "analysis": {
-      "common_errors": [...],
-      "success_rate": 0.85,
-      "retry_stats": {...}
-    }
-  }
-  ```
+**Example:**
 
-### Export Query History
-- **URL:** `/export_history`
-- **Method:** `GET`
-- **Parameters:**
-  - `format`: One of "json", "csv", or "full_csv"
-  - `id`: (Optional) Specific query ID to export
-- **Response:** File download in the specified format
+```bash
+curl -X GET http://localhost:8080/analyze
+```
 
-### Get Metrics
-- **URL:** `/metrics`
-- **Method:** `GET`
-- **Parameters:**
-  - `time_range`: One of "all", "day", "week", or "month"
-  - `limit`: Maximum number of queries to analyze
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "time_range": "week",
-    "total_queries": 100,
-    "successful_queries": 85,
-    "error_queries": 15,
-    "success_rate": 85.0,
-    "retry_metrics": {...},
-    "performance_metrics": {...},
-    "time_series": {...},
-    "complexity_metrics": {...},
-    "error_analysis": [...],
-    "query_pattern_analysis": [...]
-  }
-  ```
+### Metrics
 
-## Voice Assistant Features
+Gets evaluation metrics about query history and performance.
+
+**Endpoint:** `/metrics`
+**Method:** `GET`
+
+**Query Parameters:**
+- `time_range`: Time range for metrics (`all`, `day`, `week`, `month`)
+- `limit`: Maximum number of history items to analyze
+
+**Response:**
+Detailed metrics including:
+- High-level metrics (total queries, success rate, etc.)
+- Retry metrics
+- Performance metrics
+- SQL analysis
+- Error analysis
+- Query pattern analysis
+- Memory usage metrics
+- Time series data
+
+**Example:**
+
+```bash
+curl -X GET "http://localhost:8080/metrics?time_range=week&limit=500"
+```
+
+---
+
+## Voice Features
 
 ### Record Audio
-- **URL:** `/record_audio`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
-    "duration": 10
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "audio_path": "/audio_cache/temp_audio.wav",
-    "duration": 10
-  }
-  ```
 
-### Upload Audio File
-- **URL:** `/upload_audio`
-- **Method:** `POST`
-- **Body:** Form data with "file" field containing an audio file
-- **Response:**
-  ```json
-  {
-    "transcription": "How many teams are in the NBA?",
-    "status": "success"
-  }
-  ```
+Records audio from the user's microphone.
+
+**Endpoint:** `/record_audio`
+**Method:** `POST`
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+```json
+{
+  "duration": 10
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "audio_path": "/audio_cache/temp_audio.wav",
+  "duration": 10
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/record_audio \
+  -H "Content-Type: application/json" \
+  -d '{"duration": 10}'
+```
+
+### Upload Audio
+
+Uploads an audio file for transcription.
+
+**Endpoint:** `/upload_audio`
+**Method:** `POST`
+**Content-Type:** `multipart/form-data`
+
+**Request Parameters:**
+- `file`: The audio file to upload
+
+**Response:**
+
+```json
+{
+  "transcription": "How many users registered last month?",
+  "status": "success"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/upload_audio \
+  -F "file=@/path/to/audio.wav"
+```
 
 ### Transcribe Audio
-- **URL:** `/transcribe`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
-    "audio_path": "/audio_cache/temp_audio.wav"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "text": "How many teams are in the NBA?"
-  }
-  ```
+
+Transcribes an audio file to text.
+
+**Endpoint:** `/transcribe`
+**Method:** `POST` or `GET`
+
+**For POST:**
+**Content-Type:** `application/json`
+**Request Body:**
+
+```json
+{
+  "audio_path": "/audio_cache/temp_audio.wav"
+}
+```
+
+**For GET:**
+**Query Parameters:**
+- `audio_path`: Path to the audio file
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "text": "How many users registered last month?"
+}
+```
+
+**Example:**
+
+```bash
+# POST request
+curl -X POST http://localhost:8080/transcribe \
+  -H "Content-Type: application/json" \
+  -d '{"audio_path": "/audio_cache/temp_audio.wav"}'
+
+# GET request
+curl -X GET "http://localhost:8080/transcribe?audio_path=/audio_cache/temp_audio.wav"
+```
 
 ### Text to Speech
-- **URL:** `/text_to_speech`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
-    "text": "There are 30 teams in the NBA.",
+
+Converts text to speech using Groq.
+
+**Endpoint:** `/text_to_speech`
+**Method:** `POST`
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+```json
+{
+  "text": "There were 156 users who registered last month.",
+  "voice": "Celeste-PlayAI"
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "audio_path": "/path/to/audio_cache/speech_1684234567.wav",
+  "audio_base64": "base64_encoded_audio_data"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/text_to_speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "There were 156 users who registered last month.",
     "voice": "Celeste-PlayAI"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "audio_path": "/path/to/audio_cache/speech_12345.wav",
-    "audio_base64": "base64_encoded_audio_data"
-  }
-  ```
+  }'
+```
 
 ### Voice Assistant
-- **URL:** `/voice_assistant`
-- **Method:** `POST`
-- **Body:**
-  ```json
-  {
+
+Voice-based SQL assistant that processes audio input.
+
+**Endpoint:** `/voice_assistant`
+**Method:** `POST`
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+```json
+{
+  "audio_path": "/audio_cache/temp_audio.wav",
+  "voice": "Celeste-PlayAI"
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "question": "How many users registered last month?",
+  "sql": "SELECT COUNT(*) AS user_count FROM users WHERE strftime('%Y-%m', registration_date) = strftime('%Y-%m', 'now', '-1 month')",
+  "data": [{"user_count": 156}],
+  "columns": ["user_count"],
+  "summary": "There were 156 users who registered last month according to the database.",
+  "has_visualization": true,
+  "visualization": "{\"data\":[{\"type\":\"bar\",\"x\":[\"Last Month\"],\"y\":[156]}]}",
+  "audio_path": "/path/to/audio_cache/response_speech_1684234567.wav",
+  "audio_base64": "base64_encoded_audio_data"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/voice_assistant \
+  -H "Content-Type: application/json" \
+  -d '{
     "audio_path": "/audio_cache/temp_audio.wav",
     "voice": "Celeste-PlayAI"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "question": "How many teams are in the NBA?",
-    "sql": "SELECT COUNT(*) as team_count FROM team LIMIT 1",
-    "data": [{"team_count": 30}],
-    "columns": ["team_count"],
-    "summary": "There are 30 teams in the NBA...",
-    "has_visualization": true,
-    "visualization": "...",
-    "audio_path": "/path/to/audio_cache/response_speech_12345.wav",
-    "audio_base64": "base64_encoded_audio_data"
-  }
-  ```
+  }'
+```
 
-### Streaming Voice Assistant
-- **URL:** `/voice_assistant_stream`
-- **Method:** `GET`
-- **Parameters:**
-  - `audio_path`: Path to audio file to process
-  - `voice`: Voice ID to use for response
-- **Response:** Server-sent events stream with the following event types:
-  - `transcription`: The transcribed question
-  - `sql`: The generated SQL query
-  - `data`: The query results
-  - `visualization`: Visualization of the data (if available)
-  - `summary`: Summary of the query results
-  - `audio`: Audio data for the spoken response
-  - `error`: Any error messages
+### Voice Assistant (Streaming)
 
-### Get Available Voices
-- **URL:** `/available_voices`
-- **Method:** `GET`
-- **Response:**
-  ```json
-  {
-    "status": "success",
-    "english_voices": [
-      "Arista-PlayAI", "Atlas-PlayAI", "Basil-PlayAI", "Briggs-PlayAI",
-      "Calum-PlayAI", "Celeste-PlayAI", "Cheyenne-PlayAI", "Chip-PlayAI",
-      "Cillian-PlayAI", "Deedee-PlayAI", "Fritz-PlayAI", "Gail-PlayAI",
-      "Indigo-PlayAI", "Mamaw-PlayAI", "Mason-PlayAI", "Mikail-PlayAI",
-      "Mitch-PlayAI", "Quinn-PlayAI", "Thunder-PlayAI"
-    ],
-    "arabic_voices": [
-      "Abla-PlayAI", "Bashir-PlayAI", "Daliya-PlayAI", "Essa-PlayAI"
-    ]
-  }
-  ```
+Streaming version of the voice assistant that returns results in real-time.
+
+**Endpoint:** `/voice_assistant_stream`
+**Method:** `GET`
+
+**Query Parameters:**
+- `audio_path`: Path to the audio file
+- `voice`: Voice to use for text-to-speech (default: `Celeste-PlayAI`)
+
+**Response:**
+Server-sent events stream with the following event types:
+- `transcription`: Transcribed question
+- `sql`: Generated SQL query
+- `data`: Query results
+- `visualization`: Visualization data (if available)
+- `summary`: Text summary of the results
+- `audio`: Base64-encoded audio response
+- `error`: Error message (if something goes wrong)
+
+**Example:**
+
+```bash
+curl -X GET "http://localhost:8080/voice_assistant_stream?audio_path=/audio_cache/temp_audio.wav&voice=Celeste-PlayAI"
+```
+
+### Available Voices
+
+Gets a list of available voices for text-to-speech.
+
+**Endpoint:** `/available_voices`
+**Method:** `GET`
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "english_voices": [
+    "Arista-PlayAI", "Atlas-PlayAI", "Basil-PlayAI", "Briggs-PlayAI", 
+    "Calum-PlayAI", "Celeste-PlayAI", "Cheyenne-PlayAI", "Chip-PlayAI",
+    "Cillian-PlayAI", "Deedee-PlayAI", "Fritz-PlayAI", "Gail-PlayAI", 
+    "Indigo-PlayAI", "Mamaw-PlayAI", "Mason-PlayAI", "Mikail-PlayAI", 
+    "Mitch-PlayAI", "Quinn-PlayAI", "Thunder-PlayAI"
+  ],
+  "arabic_voices": [
+    "Abla-PlayAI", "Bashir-PlayAI", "Daliya-PlayAI", "Essa-PlayAI"
+  ]
+}
+```
+
+**Example:**
+
+```bash
+curl -X GET http://localhost:8080/available_voices
+```

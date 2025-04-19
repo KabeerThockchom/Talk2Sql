@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
-import { Database, History, Settings, Upload, Mic, Send, FileCode, Table, BarChart, FileText, Volume, ThumbsUp, ThumbsDown, Download, Activity } from 'lucide-react';
+import { Database, History, Settings, Upload, Mic, Send, FileCode, Table, BarChart, FileText, Volume, ThumbsUp, ThumbsDown, Download, Activity, Loader } from 'lucide-react';
 import { LoadingSteps, Step } from './components/LoadingSteps';
 import { ThemeToggle } from './components/ThemeToggle';
 import { CollapsibleSection } from './components/CollapsibleSection';
@@ -10,6 +10,7 @@ import { AudioPlayer } from './components/AudioPlayer';
 import { HistoryPage } from './components/HistoryPage';
 import { MetricsPage } from './components/MetricsPage';
 import { Tooltip } from './components/Tooltip';
+import { FollowUpQuestions } from './components/FollowUpQuestion';
 
 interface Database {
   name: string;
@@ -26,6 +27,179 @@ interface QueryResult {
   audio_base64?: string;
   question: string;
 }
+
+// New interface for streaming query results
+interface StreamingQueryResult {
+  question: string;
+  sql?: string;
+  data?: any[];
+  columns?: string[];
+  summary?: string;
+  visualization?: string;
+  followups?: string[];
+  isLoading: boolean;
+  isLoadingSql: boolean;
+  isLoadingData: boolean;
+  isLoadingVisualization: boolean;
+  isLoadingSummary: boolean;
+  error?: string;
+}
+
+// Custom hook for streaming query
+const useStreamQuery = () => {
+  const [result, setResult] = useState<StreamingQueryResult>({
+    question: '',
+    isLoading: false,
+    isLoadingSql: false,
+    isLoadingData: false,
+    isLoadingVisualization: false,
+    isLoadingSummary: false
+  });
+  
+  const eventSourceRef = useRef<EventSource | null>(null);
+  
+  const executeQuery = useCallback((question: string) => {
+    // Close previous connection if exists
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+    
+    console.log("Executing query:", question);
+    
+    // Reset result state but preserve the question
+    setResult(prev => ({
+      // Only reset data fields for a new query, preserving old values until new ones arrive
+      sql: undefined,
+      data: undefined,
+      columns: undefined,
+      summary: undefined,
+      visualization: undefined,
+      followups: undefined,
+      error: undefined,
+      // Set the new question and loading states
+      question,
+      isLoading: true,
+      isLoadingSql: true,
+      isLoadingData: true,
+      isLoadingVisualization: true,
+      isLoadingSummary: true
+    }));
+    
+    // Create new EventSource connection
+    const encodedQuestion = encodeURIComponent(question);
+    const eventSource = new EventSource(`https://text2sql.fly.dev/ask_stream?question=${encodedQuestion}`);
+    eventSourceRef.current = eventSource;
+    
+    // Handle different event types
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      
+      switch (data.type) {
+        case 'question':
+          // Question received, no state update needed as we already set it
+          break;
+        
+        case 'sql':
+          setResult(prev => ({
+            ...prev,
+            sql: data.sql,
+            isLoadingSql: false
+          }));
+          break;
+        
+        case 'data':
+          setResult(prev => ({
+            ...prev,
+            data: data.data,
+            columns: data.columns,
+            isLoadingData: false
+          }));
+          break;
+        
+        case 'visualization':
+          setResult(prev => ({
+            ...prev,
+            visualization: data.visualization,
+            isLoadingVisualization: false
+          }));
+          break;
+        
+        case 'summary':
+          setResult(prev => ({
+            ...prev,
+            summary: data.summary,
+            isLoadingSummary: false
+          }));
+          break;
+          
+        case 'followups':
+          setResult(prev => ({
+            ...prev,
+            followups: data.questions
+          }));
+          break;
+        
+        case 'error':
+          setResult(prev => ({
+            ...prev,
+            error: data.message,
+            isLoading: false,
+            isLoadingSql: false,
+            isLoadingData: false,
+            isLoadingVisualization: false,
+            isLoadingSummary: false
+          }));
+          break;
+        
+        case 'complete':
+          setResult(prev => ({
+            ...prev,
+            isLoading: false
+          }));
+          eventSource.close();
+          break;
+      }
+    };
+    
+    eventSource.onerror = () => {
+      setResult(prev => ({
+        ...prev,
+        error: 'Connection error. Please try again.',
+        isLoading: false,
+        isLoadingSql: false,
+        isLoadingData: false,
+        isLoadingVisualization: false,
+        isLoadingSummary: false
+      }));
+      eventSource.close();
+    };
+    
+    return () => {
+      eventSource.close();
+    };
+  }, []);
+  
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
+  }, []);
+  
+  return { result, executeQuery };
+};
+
+// Section loading component
+const SectionLoading = ({ message }: { message: string }) => (
+  <div className="flex items-center justify-center h-full">
+    <div className="text-center">
+      <Loader className="w-5 h-5 text-primary mx-auto mb-2 animate-spin" />
+      <p className="text-xs text-neutral-500 dark:text-neutral-400">{message}</p>
+    </div>
+  </div>
+);
 
 // Custom VolumeWaves component that shows volume with sound waves
 const VolumeWaves = ({ className }: { className?: string }) => {
@@ -52,6 +226,9 @@ function App() {
   const [currentView, setCurrentView] = useState<'main' | 'history' | 'metrics'>('main');
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isConnectingDb, setIsConnectingDb] = useState(false);
+  const [connectingDbPath, setConnectingDbPath] = useState<string>('');
+  const [isProcessingFollowUp, setIsProcessingFollowUp] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
 
@@ -65,12 +242,8 @@ function App() {
     }
   });
 
-  const askMutation = useMutation({
-    mutationFn: async (question: string) => {
-      const response = await axios.post('https://text2sql.fly.dev/ask', { question });
-      return response.data;
-    }
-  });
+  // Replace askMutation with streaming query
+  const { result: streamResult, executeQuery } = useStreamQuery();
 
   const [loadingState, setLoadingState] = useState<{
     steps: Step[];
@@ -89,7 +262,7 @@ function App() {
 
   useEffect(() => {
     // Only initialize the loading sequence when the query first starts loading
-    if (askMutation.isPending) {
+    if (streamResult.isLoading) {
       // Reset to initial state
       setLoadingState({
         steps: [
@@ -181,7 +354,7 @@ function App() {
         clearTimeout(timer4);
         clearTimeout(timer5);
       };
-    } else if (askMutation.isSuccess && askMutation.data) {
+    } else if (streamResult.sql && streamResult.question) {
       // All steps completed when query is successful
       setLoadingState({
         steps: [
@@ -192,10 +365,10 @@ function App() {
           { id: '5', label: 'Generating visualization', status: 'completed' },
           { id: '6', label: 'Generating data summary', status: 'completed' }
         ],
-        summary: askMutation.data.summary || 'Query completed successfully.'
+        summary: streamResult.summary || 'Query completed successfully.'
       });
     }
-  }, [askMutation.isPending, askMutation.isSuccess, askMutation.data]);
+  }, [streamResult.isLoading, streamResult.sql, streamResult.question, streamResult.summary]);
 
   useEffect(() => {
     // Check if there's a query result in the query cache from history
@@ -206,17 +379,15 @@ function App() {
     );
 
     if (historyQuery && historyQuery.state.data) {
-      // Set the result as if it came from the normal ask mutation
-      askMutation.reset();
       // Type assertion to handle the data correctly
       const data = historyQuery.state.data as { question: string };
       if (data.question) {
-        askMutation.mutate(data.question);
+        executeQuery(data.question);
       }
       // Remove the temporary query
       queryClient.removeQueries({ queryKey: ['history-rerun'] });
     }
-  }, [currentView, queryClient, askMutation]);
+  }, [currentView, queryClient, executeQuery]);
 
   // Close settings dropdown when clicking outside
   useEffect(() => {
@@ -257,11 +428,8 @@ function App() {
         // Set the query text to what was transcribed
         setQuery(transcribedText);
         
-        // Manually trigger the query with the transcribed text, same as text input
-        await askMutation.mutateAsync(transcribedText);
-        
-        // Clear the query after successful completion
-        setQuery('');
+        // Execute streaming query with transcribed text
+        executeQuery(transcribedText);
       } else {
         console.error('Transcription failed:', transcribeResponse.data);
       }
@@ -284,9 +452,12 @@ function App() {
       try {
         // Reset any previously generated audio
         setGeneratedAudio(undefined);
+        setFeedbackStatus('none');
         
-        await askMutation.mutateAsync(currentQuery);
-        // Only clear the input after successful completion
+        // Execute streaming query
+        executeQuery(currentQuery);
+        
+        // Clear the input after submitting
         setQuery('');
       } catch (error) {
         console.error('Error submitting query:', error);
@@ -296,8 +467,17 @@ function App() {
   };
 
   const connectToDatabase = async (dbPath: string) => {
-    await axios.post('https://text2sql.fly.dev/connect', { db_path: dbPath });
-    setSelectedDb(dbPath);
+    try {
+      setIsConnectingDb(true);
+      setConnectingDbPath(dbPath);
+      await axios.post('https://text2sql.fly.dev/connect', { db_path: dbPath });
+      setSelectedDb(dbPath);
+    } catch (error) {
+      console.error('Error connecting to database:', error);
+    } finally {
+      setIsConnectingDb(false);
+      setConnectingDbPath('');
+    }
   };
 
   const generateSpeech = async (text: string) => {
@@ -325,7 +505,7 @@ function App() {
     setFeedbackStatus(type);
     
     // Only proceed if we have query results
-    if (askMutation.isSuccess && askMutation.data) {
+    if (streamResult.sql && streamResult.question) {
       try {
         // Map our UI feedback type to the API's expected format
         const feedbackValue = type === 'liked' ? 'up' : 'down';
@@ -333,8 +513,8 @@ function App() {
         // Send feedback to the backend
         const response = await axios.post('https://text2sql.fly.dev/feedback', {
           feedback: feedbackValue,
-          question: askMutation.data.question,
-          sql: askMutation.data.sql
+          question: streamResult.question,
+          sql: streamResult.sql
         });
         
         console.log(`Feedback (${feedbackValue}) sent successfully`);
@@ -504,9 +684,17 @@ function App() {
                       ? 'bg-primary text-white'
                       : 'text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700'
                   }`}
+                  disabled={isConnectingDb && db.path === connectingDbPath}
                 >
-                  <Database className="w-4 h-4" />
+                  {isConnectingDb && db.path === connectingDbPath ? (
+                    <Loader className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Database className="w-4 h-4" />
+                  )}
                   <span className="truncate">{db.name}</span>
+                  {isConnectingDb && db.path === connectingDbPath && (
+                    <span className="ml-auto text-xs text-primary">Connecting...</span>
+                  )}
                 </button>
               </Tooltip>
             ))}
@@ -572,30 +760,21 @@ function App() {
         {/* Results Area */}
         <div className="flex-1 p-3 overflow-hidden">
           <div className="h-full flex flex-col">
-            {(askMutation.isPending || (askMutation.isSuccess && !askMutation.data.summary)) && (
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-4 mb-3">
-                <LoadingSteps 
-                  steps={loadingState.steps} 
-                  title={loadingState.summary}
-                />
-              </div>
-            )}
-            
-            {askMutation.isError && (
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-4 border-l-4 border-red-500">
+            {streamResult.error && (
+              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-4 border-l-4 border-red-500 mb-3">
                 <h3 className="text-red-500 font-medium mb-2">Error</h3>
                 <p className="text-neutral-700 dark:text-neutral-300">
-                  {askMutation.error instanceof Error ? askMutation.error.message : 'An error occurred while processing your query.'}
+                  {streamResult.error}
                 </p>
               </div>
             )}
             
-            {askMutation.isSuccess && (
+            {(streamResult.isLoading || streamResult.question) && !streamResult.error && (
               <>
                 {/* User Question Display */}
                 <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-2 mb-3">
                   <h3 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 mb-1">Your Question</h3>
-                  <p className="text-sm text-neutral-800 dark:text-neutral-200">{askMutation.data.question}</p>
+                  <p className="text-sm text-neutral-800 dark:text-neutral-200">{streamResult.question}</p>
                 </div>
 
                 {/* 2x2 Grid Layout */}
@@ -607,9 +786,17 @@ function App() {
                       <h3 className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Generated SQL</h3>
                     </div>
                     <div className="flex-1 p-2 overflow-auto">
-                      <pre className="bg-neutral-100 dark:bg-neutral-700 rounded-lg p-2 text-xs font-mono overflow-auto h-full">
-                        {askMutation.data.sql}
-                      </pre>
+                      {streamResult.isLoadingSql ? (
+                        <SectionLoading message="Generating SQL query..." />
+                      ) : streamResult.sql ? (
+                        <pre className="bg-neutral-100 dark:bg-neutral-700 rounded-lg p-2 text-xs font-mono overflow-auto h-full">
+                          {streamResult.sql}
+                        </pre>
+                      ) : (
+                        <div className="flex items-center justify-center h-full">
+                          <p className="text-xs text-neutral-500 dark:text-neutral-400">No SQL query yet</p>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -620,22 +807,26 @@ function App() {
                         <Table className="w-3.5 h-3.5 text-secondary mr-2" />
                         <h3 className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Results</h3>
                       </div>
-                      <Tooltip content="Download as CSV file" position="bottom" offset={24}>
-                        <button
-                          onClick={() => handleDownloadCSV(askMutation.data.data, askMutation.data.columns)}
-                          className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-neutral-100 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200 rounded-md hover:bg-neutral-200 dark:hover:bg-neutral-600 transition-colors"
-                        >
-                          <Download className="w-3 h-3" />
-                          <span>CSV</span>
-                        </button>
-                      </Tooltip>
+                      {!streamResult.isLoadingData && streamResult.data && streamResult.columns && (
+                        <Tooltip content="Download as CSV file" position="bottom" offset={24}>
+                          <button
+                            onClick={() => handleDownloadCSV(streamResult.data!, streamResult.columns!)}
+                            className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-neutral-100 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200 rounded-md hover:bg-neutral-200 dark:hover:bg-neutral-600 transition-colors"
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>CSV</span>
+                          </button>
+                        </Tooltip>
+                      )}
                     </div>
                     <div className="flex-1 p-1 overflow-auto">
-                      {askMutation.data.data.length > 0 && (
+                      {streamResult.isLoadingData ? (
+                        <SectionLoading message="Executing query..." />
+                      ) : streamResult.data && streamResult.columns && streamResult.data.length > 0 ? (
                         <table className="min-w-full text-xs">
                           <thead>
                             <tr className="bg-neutral-50 dark:bg-neutral-750">
-                              {askMutation.data.columns.map((column: string, idx: number) => (
+                              {streamResult.columns.map((column: string, idx: number) => (
                                 <th 
                                   key={idx} 
                                   className="px-2 py-1 text-left font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider sticky top-0 bg-neutral-50 dark:bg-neutral-750"
@@ -646,9 +837,9 @@ function App() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700">
-                            {askMutation.data.data.map((row: any, rowIdx: number) => (
+                            {streamResult.data.map((row: any, rowIdx: number) => (
                               <tr key={rowIdx} className="hover:bg-neutral-100 dark:hover:bg-neutral-700">
-                                {askMutation.data.columns.map((column: string, colIdx: number) => (
+                                {streamResult.columns!.map((column: string, colIdx: number) => (
                                   <td 
                                     key={colIdx} 
                                     className="px-2 py-1 text-neutral-900 dark:text-neutral-100 whitespace-nowrap"
@@ -660,18 +851,22 @@ function App() {
                             ))}
                           </tbody>
                         </table>
+                      ) : (
+                        <div className="flex items-center justify-center h-full">
+                          <p className="text-xs text-neutral-500 dark:text-neutral-400">No results to display</p>
+                        </div>
                       )}
                     </div>
                   </div>
 
                   {/* Bottom Left: Summary Section */}
-                  {askMutation.data.summary && (
-                    <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden flex flex-col">
-                      <div className="px-3 py-1.5 flex items-center justify-between border-b border-neutral-200 dark:border-neutral-700">
-                        <div className="flex items-center">
-                          <FileText className="w-3.5 h-3.5 text-secondary mr-2" />
-                          <h3 className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Summary</h3>
-                        </div>
+                  <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden flex flex-col">
+                    <div className="px-3 py-1.5 flex items-center justify-between border-b border-neutral-200 dark:border-neutral-700">
+                      <div className="flex items-center">
+                        <FileText className="w-3.5 h-3.5 text-secondary mr-2" />
+                        <h3 className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Summary</h3>
+                      </div>
+                      {!streamResult.isLoadingSummary && streamResult.summary && (
                         <div className="flex items-center gap-1">
                           <Tooltip content="This was helpful" position="bottom" offset={24}>
                             <button
@@ -701,23 +896,57 @@ function App() {
                           </Tooltip>
                           <Tooltip content="Speak" position="bottom" offset={24}>
                             <button
-                              onClick={() => generateSpeech(askMutation.data.summary || '')}
-                              disabled={isGeneratingAudio}
+                              onClick={() => generateSpeech(streamResult.summary || '')}
+                              disabled={isGeneratingAudio || !streamResult.summary}
                               className={`p-1 rounded-md bg-primary bg-opacity-10 text-primary hover:bg-opacity-20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isGeneratingAudio ? 'animate-pulse' : ''}`}
                             >
                               <VolumeWaves className="w-3 h-3" />
                             </button>
                           </Tooltip>
                         </div>
-                      </div>
-                      <div className="flex-1 p-2 overflow-auto">
+                      )}
+                    </div>
+                    <div className="flex-1 p-2 overflow-auto">
+                      {streamResult.isLoadingSummary ? (
+                        <SectionLoading message="Generating data summary..." />
+                      ) : streamResult.summary ? (
                         <div className="text-xs text-neutral-800 dark:text-neutral-200 h-full overflow-auto">
-                          {askMutation.data.summary}
+                          {streamResult.summary}
+                          
+                          {/* Follow-up questions */}
+                          {streamResult.followups && streamResult.followups.length > 0 && (
+                            <div className="mt-4 pt-2 border-t border-neutral-200 dark:border-neutral-700">
+                              <h4 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 mb-2">Follow-up Questions</h4>
+                              <FollowUpQuestions 
+                                questions={streamResult.followups} 
+                                isProcessing={isProcessingFollowUp}
+                                onSelect={(q) => {
+                                  // Prevent multiple rapid clicks
+                                  if (isProcessingFollowUp) return;
+                                  
+                                  console.log("Follow-up question selected:", q);
+                                  setIsProcessingFollowUp(true);
+                                  
+                                  // Reset any previously generated audio
+                                  setGeneratedAudio(undefined);
+                                  setFeedbackStatus('none');
+                                  
+                                  // Execute the follow-up query
+                                  executeQuery(q);
+                                  
+                                  // Reset the processing state after a short delay
+                                  setTimeout(() => {
+                                    setIsProcessingFollowUp(false);
+                                  }, 1000);
+                                }}
+                              />
+                            </div>
+                          )}
                           
                           {/* Audio Player for Voice Response or Generated Audio */}
-                          {(askMutation.data.audio_base64 || generatedAudio) && (
+                          {generatedAudio && (
                             <div className="mt-2 pt-2 border-t border-neutral-200 dark:border-neutral-700">
-                              <AudioPlayer audioBase64={generatedAudio || askMutation.data.audio_base64} />
+                              <AudioPlayer audioBase64={generatedAudio} />
                             </div>
                           )}
                           
@@ -729,32 +958,37 @@ function App() {
                             <div className="mt-1 text-xs text-red-500">Thanks for the feedback</div>
                           )}
                         </div>
-                      </div>
+                      ) : (
+                        <div className="flex items-center justify-center h-full">
+                          <p className="text-xs text-neutral-500 dark:text-neutral-400">No summary yet</p>
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
 
                   {/* Bottom Right: Visualization Section */}
-                  {askMutation.data.visualization ? (
-                    <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden flex flex-col">
-                      <div className="px-3 py-1.5 flex items-center border-b border-neutral-200 dark:border-neutral-700">
-                        <BarChart className="w-3.5 h-3.5 text-secondary mr-2" />
-                        <h3 className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Visualization</h3>
-                      </div>
-                      <div className="flex-1 p-1 overflow-hidden">
+                  <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden flex flex-col">
+                    <div className="px-3 py-1.5 flex items-center border-b border-neutral-200 dark:border-neutral-700">
+                      <BarChart className="w-3.5 h-3.5 text-secondary mr-2" />
+                      <h3 className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Visualization</h3>
+                    </div>
+                    <div className="flex-1 p-1 overflow-hidden">
+                      {streamResult.isLoadingVisualization ? (
+                        <SectionLoading message="Creating visualization..." />
+                      ) : streamResult.visualization ? (
                         <div className="h-full w-full">
-                          <PlotlyChart visualizationJson={askMutation.data.visualization} />
+                          <PlotlyChart visualizationJson={streamResult.visualization} />
                         </div>
-                      </div>
+                      ) : (
+                        <div className="flex items-center justify-center h-full">
+                          <div className="text-center p-4">
+                            <BarChart className="w-6 h-6 text-neutral-300 dark:text-neutral-600 mx-auto mb-1" />
+                            <p className="text-xs text-neutral-500 dark:text-neutral-400">No visualization available</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    // Placeholder when no visualization
-                    <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card flex items-center justify-center">
-                      <div className="text-center p-4">
-                        <BarChart className="w-6 h-6 text-neutral-300 dark:text-neutral-600 mx-auto mb-1" />
-                        <p className="text-xs text-neutral-500 dark:text-neutral-400">No visualization available</p>
-                      </div>
-                    </div>
-                  )}
+                  </div>
                 </div>
               </>
             )}
@@ -770,9 +1004,15 @@ function App() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onFocus={(e) => e.target.select()}
-                placeholder={selectedDb ? "Ask a question about your data..." : "Select a database first"}
+                placeholder={
+                  isConnectingDb 
+                    ? "Connecting to database..."
+                    : selectedDb 
+                      ? "Ask a question about your data..." 
+                      : "Select a database first"
+                }
                 className="w-full bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 placeholder-neutral-500 border border-neutral-300 dark:border-neutral-600 rounded-lg pl-4 pr-20 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                disabled={isProcessingVoice || !selectedDb}
+                disabled={isProcessingVoice || !selectedDb || streamResult.isLoading || isConnectingDb}
                 autoComplete="off"
               />
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -780,7 +1020,7 @@ function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (!isProcessingVoice && selectedDb) {
+                      if (!isProcessingVoice && selectedDb && !streamResult.isLoading) {
                         setIsRecording(!isRecording);
                         if (!isRecording) {
                           handleVoiceQuery();
@@ -788,7 +1028,7 @@ function App() {
                       }
                     }}
                     className={`p-1.5 rounded-lg transition-colors ${
-                      !selectedDb
+                      !selectedDb || streamResult.isLoading
                         ? 'text-neutral-400 bg-neutral-100 dark:bg-neutral-700 cursor-not-allowed'
                         : isProcessingVoice 
                           ? 'text-primary bg-primary bg-opacity-10 animate-pulse' 
@@ -796,7 +1036,7 @@ function App() {
                             ? 'text-primary bg-primary bg-opacity-10'
                             : 'text-neutral-500 hover:text-primary hover:bg-primary hover:bg-opacity-10 dark:hover:bg-neutral-600'
                     }`}
-                    disabled={isProcessingVoice || !selectedDb}
+                    disabled={isProcessingVoice || !selectedDb || streamResult.isLoading}
                   >
                     <Mic className="w-4 h-4" />
                   </button>
@@ -804,7 +1044,7 @@ function App() {
                 <Tooltip content={selectedDb ? "Submit question" : "Select a database first"} offset={8}>
                   <button
                     type="submit"
-                    disabled={!query.trim() || askMutation.isPending || isProcessingVoice || !selectedDb}
+                    disabled={!query.trim() || streamResult.isLoading || isProcessingVoice || !selectedDb}
                     className="p-1.5 rounded-lg text-neutral-500 hover:text-primary hover:bg-primary hover:bg-opacity-10 dark:hover:bg-neutral-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Send className="w-4 h-4" />
@@ -812,9 +1052,15 @@ function App() {
                 </Tooltip>
               </div>
             </div>
-            {!selectedDb && (
+            {!selectedDb && !isConnectingDb && (
               <div className="mt-2 text-xs text-center text-amber-600 dark:text-amber-400">
                 Please select a database from the sidebar before asking a question.
+              </div>
+            )}
+            {isConnectingDb && (
+              <div className="mt-2 text-xs text-center text-primary flex items-center justify-center">
+                <Loader className="w-3 h-3 animate-spin mr-1" />
+                Connecting to database... This may take a moment.
               </div>
             )}
           </form>

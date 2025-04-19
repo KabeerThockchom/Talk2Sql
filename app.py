@@ -22,6 +22,9 @@ import io
 import csv
 import zipfile
 import statistics
+import traceback
+import uuid
+from collections import Counter, defaultdict
 
 try:
     from dotenv import load_dotenv
@@ -30,6 +33,8 @@ except ImportError:
     print("Warning: python-dotenv not installed. Install with 'pip install python-dotenv' to load environment variables from .env file")
 
 app = Flask(__name__)
+
+DB_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'databases')
 
 # Initialize Talk2SQLAzure with Azure OpenAI
 config = {
@@ -53,6 +58,7 @@ config = {
     # Retry settings
     "max_retry_attempts": 3,
     "save_query_history": True,
+    "history_db_path": os.path.join(DB_FOLDER, "query_history.sqlite"),  # Store query history in databases folder
     
     # General settings
     "debug_mode": True,
@@ -74,6 +80,18 @@ if not Talk2SQL.save_query_history:
     print("Enabling query history saving")
     Talk2SQL.save_query_history = True
 
+# Log the query history database path
+query_history_path = getattr(Talk2SQL, "history_db_path", config.get("history_db_path", "default location"))
+print(f"Query history is being saved to: {query_history_path}")
+print(f"Absolute path to query history: {os.path.abspath(query_history_path)}")
+print(f"Database folder path: {DB_FOLDER}")
+print(f"Database folder exists: {os.path.exists(DB_FOLDER)}")
+
+# Ensure the path is set as an attribute if it's not already
+if not hasattr(Talk2SQL, "history_db_path"):
+    Talk2SQL.history_db_path = config.get("history_db_path")
+    print(f"Setting history_db_path attribute to: {Talk2SQL.history_db_path}")
+
 # Initialize Groq client for speech capabilities
 groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
@@ -84,7 +102,6 @@ logging.basicConfig(
 )
 
 # Constants
-DB_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'databases')
 TRAINING_DATA_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'training_data')
 AUDIO_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'audio_cache')
 
@@ -95,6 +112,9 @@ app.config['UPLOAD_FOLDER'] = AUDIO_FOLDER
 os.makedirs(DB_FOLDER, exist_ok=True)
 os.makedirs(TRAINING_DATA_FOLDER, exist_ok=True)
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
+
+print(f"Created or verified database folder at: {DB_FOLDER}")
+print(f"Expected query history location: {os.path.join(DB_FOLDER, 'query_history.sqlite')}")
 
 # Store the current database path
 current_db_path = None
@@ -264,6 +284,9 @@ def list_databases():
         db_files = glob.glob(os.path.join(DB_FOLDER, '*.sqlite'))
         db_files.extend(glob.glob(os.path.join(DB_FOLDER, '*.db')))
         
+        # Log the found databases
+        print(f"Found database files: {db_files}")
+        
         # Format for frontend
         databases = []
         for db_file in db_files:
@@ -273,10 +296,15 @@ def list_databases():
             if using_persistent_vectors:
                 has_persisted = db_collection_created.get(db_file, False)
             
+            # Check if this is the query history database
+            query_history_path = getattr(Talk2SQL, "history_db_path", config.get("history_db_path", ""))
+            is_query_history = db_file == query_history_path
+            
             databases.append({
                 'name': db_name,
                 'path': db_file,
-                'has_persisted_vectors': has_persisted
+                'has_persisted_vectors': has_persisted,
+                'is_query_history': is_query_history
             })
             
         # Also check if the default NBA database exists
@@ -285,7 +313,8 @@ def list_databases():
             databases.append({
                 'name': 'nba.sqlite (default)',
                 'path': default_path,
-                'has_persisted_vectors': False
+                'has_persisted_vectors': False,
+                'is_query_history': False
             })
             
         return jsonify({
@@ -337,6 +366,63 @@ def vector_store_status():
         })
     except Exception as e:
         print(f"Error getting vector store status: {e}")
+        return jsonify({"status": "error", "message": str(e)})
+
+# Check query history database status
+@app.route('/query_history_status', methods=['GET'])
+def query_history_status():
+    try:
+        query_history_path = getattr(Talk2SQL, "history_db_path", config.get("history_db_path", "unknown"))
+        exists = os.path.exists(query_history_path) if isinstance(query_history_path, str) else False
+        
+        print(f"Checking query history status: {query_history_path}")
+        print(f"File exists: {exists}")
+        
+        # If the file exists, get some basic info
+        file_info = {}
+        if exists:
+            file_info["size_bytes"] = os.path.getsize(query_history_path)
+            file_info["created"] = datetime.datetime.fromtimestamp(os.path.getctime(query_history_path)).isoformat()
+            file_info["modified"] = datetime.datetime.fromtimestamp(os.path.getmtime(query_history_path)).isoformat()
+            
+            # Try to get query count
+            try:
+                history = Talk2SQL.get_query_history(limit=None)
+                
+                # Make sure data is serializable before storing in file_info
+                serializable_history = []
+                for item in history:
+                    # Convert any bytes objects in each history item
+                    for key, value in list(item.items()):
+                        if isinstance(value, bytes):
+                            try:
+                                # Convert bytes to base64 string
+                                import base64
+                                item[key] = base64.b64encode(value).decode('utf-8')
+                            except:
+                                # If conversion fails, remove the key
+                                item[key] = None
+                    serializable_history.append(item)
+                    
+                file_info["query_count"] = len(serializable_history) if serializable_history else 0
+                print(f"Found {file_info['query_count']} queries in history database")
+            except Exception as e:
+                file_info["query_count_error"] = str(e)
+                print(f"Error getting query count: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        return jsonify({
+            "status": "success",
+            "query_history_path": query_history_path,
+            "exists": exists,
+            "in_databases_folder": query_history_path.startswith(DB_FOLDER) if isinstance(query_history_path, str) else False,
+            "file_info": file_info if exists else None
+        })
+    except Exception as e:
+        print(f"Error checking query history status: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)})
         
 # Upload a new database file
@@ -747,7 +833,8 @@ def ask_question():
             "status": "success" if result["success"] else "error",
             "sql": result["sql"],
             "retry_count": result.get("retry_count", 0),
-            "question": question
+            "question": question,
+            "used_memory": result.get("used_memory", False)  # Include memory usage
         }
         
         # Add timing information if available
@@ -836,6 +923,7 @@ def generate_data_summary(question, result):
         {result["data"].head(5).to_string()}
         
         Please provide a clear, concise summary of this data that directly answers the user's question, citing the tables and columns used to answer the question.
+        Do not repeat the data, just summarize it.
         
         Include key insights, trends, or patterns if relevant. Keep it brief and focused.
 
@@ -918,6 +1006,13 @@ def get_history():
                 "sql": item.get("sql", ""),
                 "timestamp": item.get("timestamp", ""),
                 "success": item.get("success", False),
+                "used_memory": item.get("used_memory", False),  # Include memory usage
+                # Add timing fields
+                "total_time_ms": item.get("total_time_ms"),
+                "sql_generation_time_ms": item.get("sql_generation_time_ms"),
+                "sql_execution_time_ms": item.get("sql_execution_time_ms"),
+                "visualization_time_ms": item.get("visualization_time_ms"),
+                "explanation_time_ms": item.get("explanation_time_ms")
             }
             
             # Add error if present
@@ -926,15 +1021,47 @@ def get_history():
             
             # Add data and columns if available
             if item.get("data") is not None:
-                history_item["data"] = item.get("data").to_dict(orient='records') if hasattr(item.get("data"), 'to_dict') else []
-                history_item["columns"] = item.get("columns", list(item.get("data").columns)) if hasattr(item.get("data"), 'columns') else []
+                try:
+                    if hasattr(item.get("data"), 'to_dict'):
+                        history_item["data"] = item.get("data").to_dict(orient='records')
+                    elif isinstance(item.get("data"), bytes):
+                        # Convert bytes to base64 string
+                        import base64
+                        history_item["data"] = base64.b64encode(item.get("data")).decode('utf-8')
+                    elif isinstance(item.get("data"), str) and item.get("data").startswith('b\''):
+                        # Already a string representation of bytes
+                        history_item["data"] = item.get("data")
+                    else:
+                        # Try to convert any other type
+                        history_item["data"] = str(item.get("data"))
+                except Exception as e:
+                    print(f"Error converting data: {e}")
+                    history_item["data"] = str(item.get("data"))
+                
+                # Handle columns
+                if hasattr(item.get("data"), 'columns'):
+                    history_item["columns"] = list(item.get("data").columns)
+                elif item.get("columns"):
+                    history_item["columns"] = item.get("columns")
+                else:
+                    history_item["columns"] = []
             
             # Add visualization if available
             if item.get("visualization") is not None:
                 try:
-                    history_item["visualization"] = item.get("visualization").to_json() if hasattr(item.get("visualization"), 'to_json') else None
-                except:
-                    pass  # Skip if visualization can't be converted to JSON
+                    if hasattr(item.get("visualization"), 'to_json'):
+                        history_item["visualization"] = item.get("visualization").to_json()
+                    elif isinstance(item.get("visualization"), bytes):
+                        # Convert bytes to base64 string
+                        import base64
+                        history_item["visualization"] = base64.b64encode(item.get("visualization")).decode('utf-8')
+                    elif not isinstance(item.get("visualization"), str):
+                        serializable_item['visualization'] = json.dumps(str(item['visualization']))
+                    else:
+                        history_item["visualization"] = item['visualization']
+                except Exception as e:
+                    print(f"Error converting visualization: {e}")
+                    history_item["visualization"] = None
             
             # Add summary if available
             if item.get("summary"):
@@ -944,6 +1071,9 @@ def get_history():
             
         return jsonify({"status": "success", "history": enhanced_history})
     except Exception as e:
+        print(f"Error getting history: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)})
 
 # Analyze query patterns
@@ -1352,15 +1482,41 @@ def voice_assistant_stream():
                 return
             
             # Send SQL query to client
-            sql_data = json.dumps({"type": "sql", "sql": result["sql"]})
+            sql_data = json.dumps({
+                "type": "sql", 
+                "sql": result["sql"],
+                "used_memory": result.get("used_memory", False)
+            })
             yield f"data: {sql_data}\n\n"
             
-            # Send result data
+            # Send data to client
             data_obj = {
                 "type": "data", 
-                "data": result["data"].to_dict(orient='records'), 
-                "columns": list(result["data"].columns)
+                "data": result["data"].to_dict(orient='records') if hasattr(result["data"], 'to_dict') else [], 
+                "columns": list(result["data"].columns) if hasattr(result["data"], 'columns') else []
             }
+            
+            # Ensure all values are JSON serializable
+            def ensure_serializable(obj):
+                if isinstance(obj, bytes):
+                    import base64
+                    return base64.b64encode(obj).decode('utf-8')
+                elif hasattr(obj, 'to_dict'):
+                    return obj.to_dict()
+                elif hasattr(obj, 'tolist'):
+                    return obj.tolist()
+                else:
+                    return str(obj)
+            
+            # Process data to ensure it's serializable
+            serializable_data = []
+            for record in data_obj["data"]:
+                serializable_record = {}
+                for key, value in record.items():
+                    serializable_record[key] = ensure_serializable(value)
+                serializable_data.append(serializable_record)
+            
+            data_obj["data"] = serializable_data
             data_json = json.dumps(data_obj)
             yield f"data: {data_json}\n\n"
             
@@ -1400,6 +1556,151 @@ def voice_assistant_stream():
             
         except Exception as e:
             print(f"Error in streaming voice assistant: {e}")
+            import traceback
+            traceback.print_exc()
+            error_data = json.dumps({"type": "error", "message": str(e)})
+            yield f"data: {error_data}\n\n"
+    
+    return Response(stream_with_context(generate()), 
+                   mimetype='text/event-stream',
+                   headers={
+                       'Cache-Control': 'no-cache',
+                       'Connection': 'keep-alive',
+                       'X-Accel-Buffering': 'no'
+                   })
+
+# Streaming text query endpoint
+@app.route('/ask_stream')
+def ask_stream():
+    question = request.args.get('question')
+    
+    # Print debug info
+    print(f"Received streaming query: {question}")
+    
+    if not question:
+        return jsonify({"status": "error", "message": "No question provided"}), 400
+    
+    def generate():
+        try:
+            # Set appropriate headers for Server-Sent Events
+            yield "retry: 10000\n"
+            
+            # Step 1: Acknowledge receipt of question
+            question_data = json.dumps({"type": "question", "text": question})
+            yield f"data: {question_data}\n\n"
+            
+            # Step 2: Generate SQL and execute query with thread-safe connection
+            try:
+                # Define a thread-safe run_sql function for this request
+                def thread_safe_run_sql(sql_query):
+                    conn = get_thread_safe_connection()
+                    return pd.read_sql_query(sql_query, conn)
+                
+                # Temporarily replace the run_sql function
+                original_run_sql = Talk2SQL.run_sql
+                Talk2SQL.run_sql = thread_safe_run_sql
+                
+                # Now run the query with the thread-safe function
+                result = Talk2SQL.smart_query(question, print_results=False, visualize=True)
+                
+                # Restore original function
+                Talk2SQL.run_sql = original_run_sql
+            except Exception as e:
+                print(f"Error in thread-safe SQL execution: {e}")
+                import traceback
+                traceback.print_exc()
+                error_message = f"I couldn't answer that. {str(e)}"
+                error_data = json.dumps({"type": "error", "message": error_message})
+                yield f"data: {error_data}\n\n"
+                return
+            
+            if not result["success"]:
+                error_message = f"I couldn't answer that. {result.get('error', 'There was an error processing your query.')}"
+                error_data = json.dumps({"type": "error", "message": error_message})
+                yield f"data: {error_data}\n\n"
+                return
+            
+            # Send SQL query to client
+            sql_data = json.dumps({
+                "type": "sql", 
+                "sql": result["sql"],
+                "used_memory": result.get("used_memory", False)
+            })
+            yield f"data: {sql_data}\n\n"
+            
+            # Send data to client
+            data_obj = {
+                "type": "data", 
+                "data": result["data"].to_dict(orient='records') if hasattr(result["data"], 'to_dict') else [], 
+                "columns": list(result["data"].columns) if hasattr(result["data"], 'columns') else []
+            }
+            
+            # Ensure all values are JSON serializable
+            def ensure_serializable(obj):
+                if isinstance(obj, bytes):
+                    import base64
+                    return base64.b64encode(obj).decode('utf-8')
+                elif hasattr(obj, 'to_dict'):
+                    return obj.to_dict()
+                elif hasattr(obj, 'tolist'):
+                    return obj.tolist()
+                else:
+                    return str(obj)
+            
+            # Process data to ensure it's serializable
+            serializable_data = []
+            for record in data_obj["data"]:
+                serializable_record = {}
+                for key, value in record.items():
+                    serializable_record[key] = ensure_serializable(value)
+                serializable_data.append(serializable_record)
+            
+            data_obj["data"] = serializable_data
+            data_json = json.dumps(data_obj)
+            yield f"data: {data_json}\n\n"
+            
+            # Step 3: Generate visualization if available
+            visualization_json = None
+            if "visualization" in result and result["visualization"] is not None:
+                try:
+                    visualization_json = result["visualization"].to_json()
+                    viz_data = json.dumps({"type": "visualization", "visualization": visualization_json})
+                    yield f"data: {viz_data}\n\n"
+                except Exception as e:
+                    print(f"Error converting visualization to JSON: {e}")
+            
+            # Step 4: Generate summary
+            summary, explanation_time_ms = generate_data_summary(question, result)
+            summary_data = json.dumps({
+                "type": "summary", 
+                "summary": summary,
+                "explanation_time_ms": explanation_time_ms
+            })
+            yield f"data: {summary_data}\n\n"
+            
+            # Step 5: Generate follow-up questions
+            try:
+                followups = Talk2SQL.generate_follow_up_questions(
+                    question=question,
+                    sql=result["sql"],
+                    result_info=summary,
+                    n=3
+                )
+                
+                followups_data = json.dumps({
+                    "type": "followups",
+                    "questions": followups
+                })
+                yield f"data: {followups_data}\n\n"
+            except Exception as e:
+                print(f"Error generating follow-up questions: {e}")
+                
+            # Send completion event
+            complete_data = json.dumps({"type": "complete"})
+            yield f"data: {complete_data}\n\n"
+            
+        except Exception as e:
+            print(f"Error in streaming query: {e}")
             import traceback
             traceback.print_exc()
             error_data = json.dumps({"type": "error", "message": str(e)})
@@ -1496,6 +1797,7 @@ def export_history():
                 'retry_count': item.get('retry_count', 0),
                 'timestamp': item.get('timestamp', ''),
                 'summary': item.get('summary', ''),
+                'used_memory': item.get('used_memory', False),
                 # Add timing fields
                 'total_time_ms': item.get('total_time_ms'),
                 'sql_generation_time_ms': item.get('sql_generation_time_ms'),
@@ -1512,6 +1814,10 @@ def export_history():
                     elif isinstance(item['timing_details'], str):
                         timing_details = json.loads(item['timing_details'])
                         serializable_item.update(timing_details)
+                    elif isinstance(item['timing_details'], bytes):
+                        # Handle bytes by decoding to string first
+                        timing_details = json.loads(item['timing_details'].decode('utf-8'))
+                        serializable_item.update(timing_details)
                 except Exception as e:
                     print(f"Error processing timing details: {e}")
             
@@ -1521,8 +1827,12 @@ def export_history():
                     if hasattr(item['data'], 'to_dict'):
                         serializable_item['data'] = item['data'].to_dict(orient='records')
                         serializable_item['columns'] = item['data'].columns.tolist()
+                    elif isinstance(item['data'], bytes):
+                        # Convert bytes to base64 string for JSON serialization
+                        import base64
+                        serializable_item['data'] = base64.b64encode(item['data']).decode('utf-8')
                     else:
-                        serializable_item['data'] = item['data']
+                        serializable_item['data'] = str(item['data'])
                 except Exception as e:
                     print(f"Error converting DataFrame: {e}")
                     serializable_item['data'] = str(item['data'])
@@ -1532,6 +1842,10 @@ def export_history():
                 try:
                     if hasattr(item['visualization'], 'to_json'):
                         serializable_item['visualization'] = item['visualization'].to_json()
+                    elif isinstance(item['visualization'], bytes):
+                        # Convert bytes to base64 string
+                        import base64
+                        serializable_item['visualization'] = base64.b64encode(item['visualization']).decode('utf-8')
                     elif not isinstance(item['visualization'], str):
                         serializable_item['visualization'] = json.dumps(str(item['visualization']))
                     else:
@@ -1561,7 +1875,7 @@ def export_history():
                 headers = [
                     'ID', 'Timestamp', 'Question', 'SQL', 'Success', 'Error', 'Retry Count', 
                     'Total Time (ms)', 'SQL Generation (ms)', 'SQL Execution (ms)', 
-                    'Visualization (ms)', 'Explanation (ms)', 'Row Count', 'Column Count', 'Summary'
+                    'Visualization (ms)', 'Explanation (ms)', 'Row Count', 'Column Count', 'Used Memory', 'Summary'
                 ]
                 writer.writerow(headers)
                 
@@ -1595,6 +1909,7 @@ def export_history():
                         item.get('explanation_time_ms', ''),
                         row_count,
                         col_count,
+                        item.get('used_memory', False),
                         item.get('summary', '')
                     ]
                     writer.writerow(row)
@@ -1800,231 +2115,639 @@ Export generated on: """ + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+def _parse_iso(ts: str) -> datetime.datetime:
+    """Robust ISO‑timestamp → datetime (fallback = now)."""
+    try:
+        return datetime.datetime.fromisoformat(ts)
+    except Exception:
+        return datetime.datetime.now()
+
+
+def _percentile(values, q):
+    """Safe percentile (returns 0 if data missing)."""
+    try:
+        return float(np.percentile(values, q)) if values else 0
+    except Exception:
+        return 0
+
+
+def _mean(values):
+    return float(statistics.mean(values)) if values else 0
+
 # Get evaluation metrics from query history
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
+    """Return aggregated observability metrics for the SQL‑LLM app."""
     try:
-        # Get parameters
-        time_range = request.args.get('time_range', 'all')  # all, day, week, month
-        limit = request.args.get('limit', 1000)
-        
-        # Get complete history
+        # 1️⃣ Parameters
+        time_range = request.args.get("time_range", "all")  # all | day | week | month
+        limit = int(request.args.get("limit", 1000))
+
+        # 2️⃣ Pull history (latest first)
         history = Talk2SQL.get_query_history(limit=limit)
-        
-        # Filter by time range if needed
-        if time_range != 'all':
-            now = datetime.datetime.now()
-            filtered_history = []
-            
-            for item in history:
-                try:
-                    timestamp = datetime.datetime.fromisoformat(item.get('timestamp', ''))
-                    if time_range == 'day' and (now - timestamp).days <= 1:
-                        filtered_history.append(item)
-                    elif time_range == 'week' and (now - timestamp).days <= 7:
-                        filtered_history.append(item)
-                    elif time_range == 'month' and (now - timestamp).days <= 30:
-                        filtered_history.append(item)
-                except Exception:
-                    # Skip items with invalid timestamps
-                    pass
-            
-            history = filtered_history
-        
         if not history:
-            return jsonify({
-                "status": "error", 
-                "message": "No query history available for the selected time range"
-            }), 404
-        
-        # Calculate high-level metrics
-        total_queries = len(history)
-        successful_queries = sum(1 for item in history if item.get('success', False))
-        error_queries = total_queries - successful_queries
-        success_rate = (successful_queries / total_queries) * 100 if total_queries > 0 else 0
-        
-        # Calculate retry metrics
-        queries_with_retries = sum(1 for item in history if item.get('retry_count', 0) > 0)
-        total_retries = sum(item.get('retry_count', 0) for item in history)
-        avg_retries = total_retries / queries_with_retries if queries_with_retries > 0 else 0
-        successful_after_retry = sum(1 for item in history if item.get('retry_count', 0) > 0 and item.get('success', False))
-        retry_success_rate = (successful_after_retry / queries_with_retries) * 100 if queries_with_retries > 0 else 0
-        
-        # Performance metrics
-        performance_metrics = {
-            "avg_total_time_ms": statistics.mean([item.get('total_time_ms', 0) for item in history if item.get('total_time_ms')]) if any(item.get('total_time_ms') for item in history) else 0,
-            "avg_sql_generation_time_ms": statistics.mean([item.get('sql_generation_time_ms', 0) for item in history if item.get('sql_generation_time_ms')]) if any(item.get('sql_generation_time_ms') for item in history) else 0,
-            "avg_sql_execution_time_ms": statistics.mean([item.get('sql_execution_time_ms', 0) for item in history if item.get('sql_execution_time_ms')]) if any(item.get('sql_execution_time_ms') for item in history) else 0,
-            "avg_visualization_time_ms": statistics.mean([item.get('visualization_time_ms', 0) for item in history if item.get('visualization_time_ms')]) if any(item.get('visualization_time_ms') for item in history) else 0,
-            "avg_explanation_time_ms": statistics.mean([item.get('explanation_time_ms', 0) for item in history if item.get('explanation_time_ms')]) if any(item.get('explanation_time_ms') for item in history) else 0,
+            return jsonify({"status": "success", "message": "No query history", "total_queries": 0})
+
+        # 3️⃣ Filter by time window
+        if time_range != "all":
+            now = datetime.datetime.now()
+            delta = {"day": 1, "week": 7, "month": 30}[time_range]
+            history = [item for item in history if (now - _parse_iso(item.get("timestamp", ""))).days <= delta]
+
+        if not history:
+            return jsonify({"status": "success", "message": "No query history in range", "total_queries": 0})
+
+        # Pre‑extract common lists for fast stats
+        total_times = [item.get("total_time_ms", 0) for item in history if item.get("total_time_ms")]
+        gen_times   = [item.get("sql_generation_time_ms", 0) for item in history if item.get("sql_generation_time_ms")]
+        exec_times  = [item.get("sql_execution_time_ms", 0) for item in history if item.get("sql_execution_time_ms")]
+        viz_times   = [item.get("visualization_time_ms", 0) for item in history if item.get("visualization_time_ms")]
+        expl_times  = [item.get("explanation_time_ms", 0) for item in history if item.get("explanation_time_ms")]
+
+        # 4️⃣ High‑level counts
+        total_q        = len(history)
+        success_q      = sum(1 for h in history if h.get("success"))
+        error_q        = total_q - success_q
+        success_rate   = (success_q / total_q) * 100 if total_q else 0
+
+        # 5️⃣ Percentiles (p50 & p95)
+        latency_p50 = _percentile(total_times, 50)
+        latency_p95 = _percentile(total_times, 95)
+
+        stage_p95 = {
+            "generation_ms": _percentile(gen_times, 95),
+            "execution_ms":  _percentile(exec_times, 95),
+            "visualization_ms": _percentile(viz_times, 95),
+            "explanation_ms":  _percentile(expl_times, 95),
         }
-        
-        # Time series data - group by day
-        time_data = {}
-        for item in history:
-            try:
-                timestamp = datetime.datetime.fromisoformat(item.get('timestamp', ''))
-                day_key = timestamp.strftime('%Y-%m-%d')
-                
-                if day_key not in time_data:
-                    time_data[day_key] = {
-                        'count': 0,
-                        'success_count': 0,
-                        'total_time': 0,
-                        'retries': 0
-                    }
-                
-                time_data[day_key]['count'] += 1
-                if item.get('success', False):
-                    time_data[day_key]['success_count'] += 1
-                if item.get('total_time_ms'):
-                    time_data[day_key]['total_time'] += item.get('total_time_ms', 0)
-                time_data[day_key]['retries'] += item.get('retry_count', 0)
-            except Exception:
-                # Skip items with invalid timestamps
-                pass
-        
-        # Create time series arrays for plotting
-        time_series = {
-            'dates': list(time_data.keys()),
-            'counts': [time_data[day]['count'] for day in time_data.keys()],
-            'success_rates': [time_data[day]['success_count'] / time_data[day]['count'] * 100 if time_data[day]['count'] > 0 else 0 for day in time_data.keys()],
-            'avg_times': [time_data[day]['total_time'] / time_data[day]['count'] if time_data[day]['count'] > 0 else 0 for day in time_data.keys()],
-            'retries': [time_data[day]['retries'] for day in time_data.keys()]
+
+        # 6️⃣ Latency breakdown (mean share)
+        mean_gen = _mean(gen_times)
+        mean_exec = _mean(exec_times)
+        mean_viz = _mean(viz_times)
+        mean_expl = _mean(expl_times)
+        mean_total = _mean(total_times)
+        breakdown_share = {
+            "generation_pct": (mean_gen / mean_total) * 100 if mean_total else 0,
+            "execution_pct":  (mean_exec / mean_total) * 100 if mean_total else 0,
+            "visualization_pct": (mean_viz / mean_total) * 100 if mean_total else 0,
+            "explanation_pct":  (mean_expl / mean_total) * 100 if mean_total else 0,
         }
-        
-        # SQL complexity analysis
-        sql_lengths = [len(item.get('sql', '')) for item in history if item.get('sql')]
-        avg_sql_length = statistics.mean(sql_lengths) if sql_lengths else 0
-        
-        # Result size metrics
-        data_sizes = []
-        for item in history:
-            if item.get('data') is not None:
-                try:
-                    if hasattr(item.get('data'), 'shape'):
-                        data_sizes.append(item.get('data').shape[0])
-                    elif isinstance(item.get('data'), list):
-                        data_sizes.append(len(item.get('data')))
-                except Exception:
-                    pass
-                    
-        avg_result_rows = statistics.mean(data_sizes) if data_sizes else 0
-        
-        # Visualizations metrics
-        queries_with_viz = sum(1 for item in history if item.get('visualization') is not None)
-        viz_rate = (queries_with_viz / successful_queries) * 100 if successful_queries > 0 else 0
-        
-        # Error analysis
-        error_types = {}
-        for item in history:
-            if not item.get('success', True) and item.get('error_message'):
-                error_msg = item.get('error_message', '')
-                error_type = 'Unknown'
-                
-                # Categorize errors by common patterns
-                if 'syntax error' in error_msg.lower():
-                    error_type = 'Syntax Error'
-                elif 'no such table' in error_msg.lower():
-                    error_type = 'Table Not Found'
-                elif 'no such column' in error_msg.lower():
-                    error_type = 'Column Not Found'
-                elif 'constraint' in error_msg.lower():
-                    error_type = 'Constraint Violation'
-                elif 'connection' in error_msg.lower():
-                    error_type = 'Connection Error'
-                
-                if error_type in error_types:
-                    error_types[error_type] += 1
-                else:
-                    error_types[error_type] = 1
-        
-        # Format error types for visualization
-        error_analysis = [{"type": k, "count": v} for k, v in error_types.items()]
-        
-        # Most common query patterns (based on SQL analysis)
-        query_patterns = {}
-        for item in history:
-            sql = item.get('sql', '').lower()
-            patterns = []
-            
-            # Can match multiple patterns in a single query
-            if 'count(' in sql or 'count (' in sql:
-                patterns.append('Count')
-            if 'sum(' in sql or 'sum (' in sql:
-                patterns.append('Sum')
-            if 'avg(' in sql or 'average(' in sql or 'mean(' in sql:
-                patterns.append('Average/Mean')
-            if 'min(' in sql or 'max(' in sql:
-                patterns.append('Min/Max')
-            if 'group by' in sql:
-                patterns.append('Group By')
-            if 'order by' in sql:
-                patterns.append('Order By')
-            if 'join' in sql:
-                patterns.append('Joins')
-            if 'where' in sql:
-                patterns.append('Filtering')
-            if 'having' in sql:
-                patterns.append('Having')
-            if 'limit' in sql:
-                patterns.append('Limited Results')
-            if 'distinct' in sql:
-                patterns.append('Distinct')
-            if 'case' in sql:
-                patterns.append('Case Statements')
-            if 'subquery' in sql or (sql.count('select') > 1):
-                patterns.append('Subqueries')
-                
-            # If no specific patterns detected, classify as Simple Select
-            if not patterns and 'select' in sql:
-                patterns.append('Simple Select')
-                
-            # If still no patterns, mark as Other
-            if not patterns:
-                patterns.append('Other')
-                
-            # Count occurrences of each pattern
-            for pattern in patterns:
-                if pattern in query_patterns:
-                    query_patterns[pattern] += 1
-                else:
-                    query_patterns[pattern] = 1
-                
-        query_pattern_analysis = [{"type": k, "count": v} for k, v in query_patterns.items()]
-        
-        # Return all metrics
-        return jsonify({
-            "status": "success",
-            "time_range": time_range,
-            "total_queries": total_queries,
-            "successful_queries": successful_queries,
-            "error_queries": error_queries,
+
+        # 7️⃣ Retry insights
+        retry_counts = [h.get("retry_count", 0) for h in history]
+        queries_with_retry = sum(1 for r in retry_counts if r > 0)
+        total_retries = sum(retry_counts)
+        retry_rate   = (queries_with_retry / total_q) * 100 if total_q else 0
+        retry_success = sum(1 for h in history if h.get("retry_count", 0) > 0 and h.get("success"))
+        retry_success_rate = (retry_success / queries_with_retry) * 100 if queries_with_retry else 0
+
+        # 8️⃣ Memory usage stats
+        uses_mem = [h for h in history if h.get("used_memory")]
+        mem_used_q = len(uses_mem)
+        mem_success_q = sum(1 for h in uses_mem if h.get("success"))
+        mem_success_rate = (mem_success_q / mem_used_q) * 100 if mem_used_q else 0
+        no_mem_q = total_q - mem_used_q
+        no_mem_success_rate = (success_q - mem_success_q) / no_mem_q * 100 if no_mem_q else 0
+
+        # 9️⃣ Error taxonomy (top 5)
+        err_bucket = Counter()
+        for h in history:
+            if h.get("success"):
+                continue
+            msg = (h.get("error_message") or "").lower()
+            if "syntax" in msg:
+                err_bucket["syntax_error"] += 1
+            elif "timeout" in msg:
+                err_bucket["timeout"] += 1
+            elif any(t in msg for t in ["permission", "access"]):
+                err_bucket["permission"] += 1
+            elif "connection" in msg:
+                err_bucket["connection"] += 1
+            elif "not exist" in msg or "not found" in msg:
+                if "table" in msg:
+                    err_bucket["table_not_found"] += 1
+                elif "column" in msg:
+                    err_bucket["column_not_found"] += 1
+            else:
+                err_bucket["other"] += 1
+        top_errors = err_bucket.most_common(5)
+
+        # 🔟 Time‑series (per‑day)
+        ts_counts = defaultdict(lambda: {"total": 0, "success": 0, "retry": 0})
+        for h in history:
+            d = _parse_iso(h.get("timestamp", "")).date().isoformat()
+            ts_counts[d]["total"] += 1
+            if h.get("success"):
+                ts_counts[d]["success"] += 1
+            if h.get("retry_count", 0) > 0:
+                ts_counts[d]["retry"] += 1
+        ts_sorted = sorted(ts_counts.items())
+        dates             = [d for d, _ in ts_sorted]
+        daily_total       = [v["total"] for _, v in ts_sorted]
+        daily_success     = [v["success"] for _, v in ts_sorted]
+        daily_retry       = [v["retry"] for _, v in ts_sorted]
+        daily_success_pct = [(s / t) * 100 if t else 0 for s, t in zip(daily_success, daily_total)]
+
+        # 1️⃣1️⃣ Package response
+        response = {
+            "total_queries": total_q,
+            "successful_queries": success_q,
+            "error_queries": error_q,
             "success_rate": success_rate,
+
+            "latency": {
+                "p50_total_ms": latency_p50,
+                "p95_total_ms": latency_p95,
+                "stage_p95_ms": stage_p95,
+                "mean_breakdown_pct": breakdown_share,
+            },
+
             "retry_metrics": {
-                "queries_with_retries": queries_with_retries,
+                "queries_with_retry": queries_with_retry,
                 "total_retries": total_retries,
-                "avg_retries": avg_retries,
-                "successful_after_retry": successful_after_retry,
-                "retry_success_rate": retry_success_rate
+                "retry_rate_pct": retry_rate,
+                "retry_success_rate_pct": retry_success_rate,
             },
-            "performance_metrics": performance_metrics,
-            "time_series": time_series,
-            "complexity_metrics": {
-                "avg_sql_length": avg_sql_length,
-                "avg_result_rows": avg_result_rows,
-                "visualization_rate": viz_rate
+
+            "memory_metrics": {
+                "queries_with_memory": mem_used_q,
+                "memory_usage_rate_pct": (mem_used_q / total_q) * 100 if total_q else 0,
+                "with_memory_success_rate_pct": mem_success_rate,
+                "without_memory_success_rate_pct": no_mem_success_rate,
             },
-            "error_analysis": error_analysis,
-            "query_pattern_analysis": query_pattern_analysis
-        })
-    except Exception as e:
-        import traceback
+
+            "top_errors": [{"type": k, "count": v} for k, v in top_errors],
+
+            "time_series": {
+                "dates": dates,
+                "counts": daily_total,
+                "success_counts": daily_success,
+                "success_rates": daily_success_pct,
+                "retries": daily_retry,
+            },
+        }
+
+        return jsonify(response)
+
+    except Exception as exc:
         traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+    # try:
+    #     # Get parameters
+    #     time_range = request.args.get('time_range', 'all')  # all, day, week, month
+    #     limit = request.args.get('limit', 1000)
+        
+    #     # Get complete history
+    #     history = Talk2SQL.get_query_history(limit=limit)
+        
+    #     # Filter by time range if needed
+    #     if time_range != 'all':
+    #         now = datetime.datetime.now()
+    #         filtered_history = []
+            
+    #         for item in history:
+    #             try:
+    #                 timestamp = datetime.datetime.fromisoformat(item.get('timestamp', ''))
+    #                 if time_range == 'day' and (now - timestamp).days <= 1:
+    #                     filtered_history.append(item)
+    #                 elif time_range == 'week' and (now - timestamp).days <= 7:
+    #                     filtered_history.append(item)
+    #                 elif time_range == 'month' and (now - timestamp).days <= 30:
+    #                     filtered_history.append(item)
+    #             except Exception:
+    #                 # Skip items with invalid timestamps
+    #                 pass
+            
+    #         history = filtered_history
+        
+    #     if not history:
+    #         return jsonify({
+    #             "status": "success", 
+    #             "message": "No query history available for the selected time range",
+    #             "total_queries": 0,
+    #             "successful_queries": 0,
+    #             "error_queries": 0,
+    #             "success_rate": 0,
+    #             "high_level_metrics": {
+    #                 "total_queries": 0,
+    #                 "successful_queries": 0,
+    #                 "error_queries": 0,
+    #                 "success_rate": 0,
+    #                 "avg_time_ms": 0,
+    #                 "data_returned_rate": 0
+    #             },
+    #             "retry_metrics": {
+    #                 "queries_with_retries": 0,
+    #                 "total_retries": 0,
+    #                 "retry_rate": 0,
+    #                 "avg_retries": 0,
+    #                 "successful_after_retry": 0,
+    #                 "retry_success_rate": 0,
+    #                 "retry_percentage": 0
+    #             },
+    #             "performance_metrics": {
+    #                 "avg_time_ms": 0,
+    #                 "avg_total_time_ms": 0,
+    #                 "avg_sql_generation_time_ms": 0,
+    #                 "avg_sql_execution_time_ms": 0,
+    #                 "avg_visualization_time_ms": 0,
+    #                 "avg_explanation_time_ms": 0
+    #             },
+    #             "sql_analysis": {
+    #                 "avg_sql_length": 0,
+    #                 "avg_complexity_score": 0,
+    #                 "complexity_distribution": []
+    #             },
+    #             "error_analysis": [],
+    #             "most_common_errors": [],
+    #             "query_pattern_analysis": [],
+    #             "most_common_question_types": [],
+    #             "memory_metrics": {
+    #                 "total_with_memory": 0,
+    #                 "total_without_memory": 0,
+    #                 "memory_usage_rate": 0,
+    #                 "with_memory_success_rate": 0,
+    #                 "without_memory_success_rate": 0,
+    #                 "success_rate_difference": 0
+    #             },
+    #             "complexity_metrics": {
+    #                 "avg_complexity_score": 0,
+    #                 "avg_sql_length": 0,
+    #                 "avg_result_rows": 0
+    #             },
+    #             "time_series": {
+    #                 "dates": [],
+    #                 "counts": [],
+    #                 "success_counts": [],
+    #                 "success_rates": [],
+    #                 "failed": [],
+    #                 "retries": [],
+    #                 "memory_used_count": [],
+    #                 "memory_used_success": [],
+    #                 "avg_times": []
+    #             }
+    #         })
+        
+    #     # Calculate high-level metrics
+    #     total_queries = len(history)
+    #     successful_queries = sum(1 for item in history if item.get('success', False))
+    #     error_queries = total_queries - successful_queries
+    #     success_rate = (successful_queries / total_queries) * 100 if total_queries > 0 else 0
+        
+    #     # Calculate retry metrics
+    #     queries_with_retries = sum(1 for item in history if item.get('retry_count', 0) > 0)
+    #     total_retries = sum(item.get('retry_count', 0) for item in history)
+    #     avg_retries = total_retries / queries_with_retries if queries_with_retries > 0 else 0
+    #     successful_after_retry = sum(1 for item in history if item.get('retry_count', 0) > 0 and item.get('success', False))
+    #     retry_success_rate = (successful_after_retry / queries_with_retries) * 100 if queries_with_retries > 0 else 0
+    #     retry_rate = (queries_with_retries / total_queries) * 100 if total_queries > 0 else 0
+        
+    #     # Performance metrics
+    #     performance_metrics = {
+    #         "avg_total_time_ms": statistics.mean([item.get('total_time_ms', 0) for item in history if item.get('total_time_ms')]) if any(item.get('total_time_ms') for item in history) else 0,
+    #         "avg_sql_generation_time_ms": statistics.mean([item.get('sql_generation_time_ms', 0) for item in history if item.get('sql_generation_time_ms')]) if any(item.get('sql_generation_time_ms') for item in history) else 0,
+    #         "avg_sql_execution_time_ms": statistics.mean([item.get('sql_execution_time_ms', 0) for item in history if item.get('sql_execution_time_ms')]) if any(item.get('sql_execution_time_ms') for item in history) else 0,
+    #         "avg_visualization_time_ms": statistics.mean([item.get('visualization_time_ms', 0) for item in history if item.get('visualization_time_ms')]) if any(item.get('visualization_time_ms') for item in history) else 0,
+    #         "avg_explanation_time_ms": statistics.mean([item.get('explanation_time_ms', 0) for item in history if item.get('explanation_time_ms')]) if any(item.get('explanation_time_ms') for item in history) else 0,
+    #     }
+        
+    #     # Calculate avg_time from performance_metrics
+    #     avg_time = performance_metrics["avg_total_time_ms"]
+    #     # Extract other performance metrics for direct use in the response
+    #     avg_sql_generation_time = performance_metrics["avg_sql_generation_time_ms"]
+    #     avg_sql_execution_time = performance_metrics["avg_sql_execution_time_ms"]
+    #     avg_visualization_time = performance_metrics["avg_visualization_time_ms"]
+    #     avg_explanation_time = performance_metrics["avg_explanation_time_ms"]
+        
+    #     # Count data_returned
+    #     data_returned_count = sum(1 for item in history if item.get('data') is not None and isinstance(item.get('data'), (list, pd.DataFrame)) and len(item.get('data')) > 0)
+    #     data_returned_rate = (data_returned_count / total_queries) * 100 if total_queries > 0 else 0
+        
+    #     # Helper function to convert string timestamp to date
+    #     def convert_str_to_date(timestamp_str):
+    #         try:
+    #             return datetime.datetime.fromisoformat(timestamp_str)
+    #         except (ValueError, TypeError):
+    #             # Default to now if the format is invalid
+    #             return datetime.datetime.now()
+                
+    #     # Prepare time series data
+    #     # Extract dates from history items
+    #     all_dates = [convert_str_to_date(item.get('timestamp', '')).date() for item in history if item.get('timestamp')]
+        
+    #     # Get unique dates and sort them
+    #     unique_dates = sorted(list(set(all_dates)))
+        
+    #     # If no dates are found, use an empty list
+    #     if not unique_dates:
+    #         unique_dates = []
+            
+    #     # Create date mapping for fast lookup
+    #     date_map = {date: i for i, date in enumerate(unique_dates)}
+        
+    #     # Format dates as strings for display
+    #     dates = [date.strftime('%Y-%m-%d') for date in unique_dates]
+        
+    #     # Initialize counters for each date
+    #     query_counts = [0] * len(dates)
+    #     success_counts = [0] * len(dates)
+    #     error_counts = [0] * len(dates)
+    #     retry_counts = [0] * len(dates)
+        
+    #     # Populate counters
+    #     for item in history:
+    #         try:
+    #             query_date = convert_str_to_date(item.get('timestamp', '')).date()
+    #             if query_date in date_map:
+    #                 index = date_map[query_date]
+    #                 query_counts[index] += 1
+    #                 if item.get('success', False):
+    #                     success_counts[index] += 1
+    #                 else:
+    #                     error_counts[index] += 1
+    #                 if item.get('retry_count', 0) > 0:
+    #                     retry_counts[index] += 1
+    #         except Exception:
+    #             pass
+        
+    #     # Calculate success rates for each date
+    #     success_rates = [
+    #         (success_counts[i] / query_counts[i]) * 100 if query_counts[i] > 0 else 0
+    #         for i in range(len(dates))
+    #     ]
+        
+    #     # Time series analysis
+    #     time_series = {
+    #         'dates': dates,
+    #         'counts': query_counts,
+    #         'success_counts': success_counts,
+    #         'success_rates': success_rates,
+    #         'failed': error_counts,
+    #         'retries': retry_counts,
+    #         'memory_used_count': [0] * len(dates),  # Initialize memory usage counts
+    #         'memory_used_success': [0] * len(dates)  # Initialize successful memory usage counts
+    #     }
+        
+    #     # Map data to time series
+    #     for item in history:
+    #         try:
+    #             query_date = convert_str_to_date(item.get('timestamp', '')).date()
+    #             if query_date in date_map:
+    #                 index = date_map[query_date]
+    #                 # Check for memory usage
+    #                 used_memory = item.get('used_memory', False)
+    #                 if used_memory:
+    #                     time_series['memory_used_count'][index] += 1
+    #                     if item.get('success', False):
+    #                         time_series['memory_used_success'][index] += 1
+    #         except Exception:
+    #             pass
+
+    #     # Memory usage metrics
+    #     memory_used_count = sum(1 for item in history if item.get('used_memory', False))
+    #     memory_not_used_count = total_queries - memory_used_count
+    #     memory_usage_rate = (memory_used_count / total_queries) * 100 if total_queries > 0 else 0
+        
+    #     # Success rates with and without memory
+    #     memory_success_count = sum(1 for item in history if item.get('used_memory', False) and item.get('success', False))
+    #     memory_success_rate = (memory_success_count / memory_used_count) * 100 if memory_used_count > 0 else 0
+        
+    #     no_memory_success_count = sum(1 for item in history if not item.get('used_memory', False) and item.get('success', False))
+    #     no_memory_success_rate = (no_memory_success_count / memory_not_used_count) * 100 if memory_not_used_count > 0 else 0
+
+    #     memory_metrics = {
+    #         "total_with_memory": memory_used_count,
+    #         "total_without_memory": memory_not_used_count, 
+    #         "memory_usage_rate": memory_usage_rate,
+    #         "with_memory_success_rate": memory_success_rate,
+    #         "without_memory_success_rate": no_memory_success_rate,
+    #         "success_rate_difference": memory_success_rate - no_memory_success_rate
+    #     }
+        
+    #     # SQL complexity analysis
+    #     sql_lengths = [len(item.get('sql', '')) for item in history if item.get('sql')]
+    #     avg_sql_length = statistics.mean(sql_lengths) if sql_lengths else 0
+        
+    #     # Basic SQL complexity heuristic - count of SQL keywords as a measure of complexity
+    #     sql_keywords = ['SELECT', 'FROM', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'UNION', 'INTERSECT', 'EXCEPT', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'WITH']
+    #     complexity_scores = []
+        
+    #     for item in history:
+    #         sql = item.get('sql', '')
+    #         if sql:
+    #             score = 1  # Base complexity
+    #             for keyword in sql_keywords:
+    #                 if keyword in sql.upper():
+    #                     score += 1
+    #             complexity_scores.append(score)
+        
+    #     avg_complexity = statistics.mean(complexity_scores) if complexity_scores else 0
+        
+    #     # Group queries by error type for error analysis
+    #     error_types = {}
+    #     for item in history:
+    #         if not item.get('success', True):
+    #             error_msg = item.get('error', 'Unknown error')
+    #             error_type = 'Unknown error'
+                
+    #             # Classify error types
+    #             if 'syntax error' in error_msg.lower():
+    #                 error_type = 'Syntax error'
+    #             elif 'permission' in error_msg.lower() or 'access' in error_msg.lower():
+    #                 error_type = 'Permission error'
+    #             elif 'timeout' in error_msg.lower():
+    #                 error_type = 'Timeout error'
+    #             elif 'connection' in error_msg.lower():
+    #                 error_type = 'Connection error'
+    #             elif 'table' in error_msg.lower() and ('not exist' in error_msg.lower() or 'not found' in error_msg.lower()):
+    #                 error_type = 'Table not found'
+    #             elif 'column' in error_msg.lower() and ('not exist' in error_msg.lower() or 'not found' in error_msg.lower()):
+    #                 error_type = 'Column not found'
+                
+    #             if error_type not in error_types:
+    #                 error_types[error_type] = 0
+    #             error_types[error_type] += 1
+        
+    #     error_analysis = {
+    #         'count_by_type': error_types,
+    #         'total': error_queries,
+    #         'percentage': (error_queries / total_queries) * 100 if total_queries > 0 else 0
+    #     }
+        
+    #     # Analyze query patterns
+    #     question_patterns = {}
+    #     for item in history:
+    #         question = item.get('question', '').lower()
+    #         pattern = 'Other'
+            
+    #         if any(word in question for word in ['how many', 'count']):
+    #             pattern = 'Count/How many'
+    #         elif any(word in question for word in ['average', 'avg', 'mean']):
+    #             pattern = 'Average/Mean'
+    #         elif any(word in question for word in ['sum', 'total']):
+    #             pattern = 'Sum/Total'
+    #         elif any(word in question for word in ['maximum', 'max', 'highest', 'top']):
+    #             pattern = 'Maximum/Top'
+    #         elif any(word in question for word in ['minimum', 'min', 'lowest', 'bottom']):
+    #             pattern = 'Minimum/Bottom'
+    #         elif any(word in question for word in ['list', 'show', 'display', 'give me']):
+    #             pattern = 'List/Show'
+            
+    #         if pattern not in question_patterns:
+    #             question_patterns[pattern] = 0
+    #         question_patterns[pattern] += 1
+        
+    #     # Format error types for response
+    #     error_type_counts = [{"type": k, "count": v} for k, v in error_types.items()]
+    #     most_common_errors = sorted(error_type_counts, key=lambda x: x["count"], reverse=True)[:5]
+        
+    #     # Format query patterns for response
+    #     question_type_distribution = [{"type": k, "count": v} for k, v in question_patterns.items()]
+    #     most_common_question_types = sorted(question_type_distribution, key=lambda x: x["count"], reverse=True)[:5]
+        
+    #     # Create complexity distribution
+    #     complexity_buckets = {
+    #         "Simple (1-3)": 0,
+    #         "Medium (4-6)": 0, 
+    #         "Complex (7-10)": 0,
+    #         "Very Complex (11+)": 0
+    #     }
+        
+    #     for score in complexity_scores:
+    #         if score <= 3:
+    #             complexity_buckets["Simple (1-3)"] += 1
+    #         elif score <= 6:
+    #             complexity_buckets["Medium (4-6)"] += 1
+    #         elif score <= 10:
+    #             complexity_buckets["Complex (7-10)"] += 1
+    #         else:
+    #             complexity_buckets["Very Complex (11+)"] += 1
+        
+    #     complexity_distribution = [{"type": k, "count": v} for k, v in complexity_buckets.items()]
+        
+    #     query_pattern_analysis = {
+    #         'count_by_pattern': question_patterns
+    #     }
+        
+    #     # Return formatted metrics
+    #     result = {
+    #         "total_queries": total_queries or 0,
+    #         "successful_queries": successful_queries or 0,
+    #         "error_queries": error_queries or 0,
+    #         "success_rate": success_rate or 0,
+    #         "high_level_metrics": {
+    #             "total_queries": total_queries or 0,
+    #             "successful_queries": successful_queries or 0,
+    #             "error_queries": error_queries or 0,
+    #             "success_rate": success_rate or 0,
+    #             "avg_time_ms": avg_time or 0,
+    #             "data_returned_rate": data_returned_rate or 0
+    #         },
+    #         "retry_metrics": {
+    #             "queries_with_retries": queries_with_retries or 0,
+    #             "total_retries": total_retries or 0,
+    #             "retry_rate": retry_rate or 0,
+    #             "avg_retries": avg_retries or 0,
+    #             "successful_after_retry": successful_after_retry or 0,
+    #             "retry_success_rate": retry_success_rate or 0,
+    #             "retry_percentage": (queries_with_retries / total_queries) * 100 if total_queries > 0 else 0
+    #         },
+    #         "performance_metrics": {
+    #             "avg_time_ms": avg_time or 0,
+    #             "avg_total_time_ms": avg_time or 0,
+    #             "avg_sql_generation_time_ms": avg_sql_generation_time or 0,
+    #             "avg_sql_execution_time_ms": avg_sql_execution_time or 0,
+    #             "avg_visualization_time_ms": avg_visualization_time or 0,
+    #             "avg_explanation_time_ms": avg_explanation_time or 0
+    #         },
+    #         "sql_analysis": {
+    #             "avg_sql_length": avg_sql_length or 0,
+    #             "avg_complexity_score": avg_complexity or 0,
+    #             "complexity_distribution": complexity_distribution or []
+    #         },
+    #         "error_analysis": error_type_counts or [],
+    #         "most_common_errors": most_common_errors or [],
+    #         "query_pattern_analysis": question_type_distribution or [],
+    #         "most_common_question_types": most_common_question_types or [],
+    #         "memory_metrics": memory_metrics or {
+    #             "total_with_memory": 0,
+    #             "total_without_memory": 0,
+    #             "memory_usage_rate": 0,
+    #             "with_memory_success_rate": 0,
+    #             "without_memory_success_rate": 0,
+    #             "success_rate_difference": 0
+    #         },
+    #         "complexity_metrics": {
+    #             "avg_complexity_score": avg_complexity or 0,
+    #             "avg_sql_length": avg_sql_length or 0,
+    #             "avg_result_rows": sum(
+    #                 len(item.get("data")) if isinstance(item.get("data"), list) 
+    #                 else (item.get("data").shape[0] if isinstance(item.get("data"), pd.DataFrame) and not item.get("data").empty else 0)
+    #                 for item in history if item.get("data") is not None
+    #             ) / total_queries if total_queries > 0 else 0
+    #         },
+    #         "time_series": {
+    #             "dates": dates if dates else [],
+    #             "counts": query_counts if query_counts else [],
+    #             "success_counts": success_counts if success_counts else [],
+    #             "success_rates": success_rates if success_rates else [],
+    #             "failed": error_counts if error_counts else [],
+    #             "retries": retry_counts if retry_counts else [],
+    #             "memory_used_count": time_series.get("memory_used_count", []) if time_series else [],
+    #             "memory_used_success": time_series.get("memory_used_success", []) if time_series else [],
+    #             "avg_times": [float(avg_time or 0)] * len(dates) if dates else []
+    #         }
+    #     }
+        
+    #     # Log the response for debugging
+    #     print(f"Metrics response: {json.dumps(result, default=str)}")
+
+    #     # Sanitize metrics to ensure no undefined or null values
+    #     def sanitize_metrics(obj):
+    #         if isinstance(obj, dict):
+    #             return {k: sanitize_metrics(v) for k, v in obj.items()}
+    #         elif isinstance(obj, list):
+    #             return [sanitize_metrics(item) for item in obj]
+    #         elif isinstance(obj, (int, float)):
+    #             return obj
+    #         elif obj is None:
+    #             return 0
+    #         else:
+    #             return obj
+                
+    #     # Apply sanitization
+    #     result = sanitize_metrics(result)
+
+    #     return jsonify(result)
+    # except Exception as e:
+    #     traceback.print_exc()
+    #     return jsonify({"status": "error", "message": str(e)}), 500
 
 #prod
 if __name__ == '__main__':
+    # Verify query history file location
+    print("\n--- QUERY HISTORY VERIFICATION ---")
+    query_history_path = getattr(Talk2SQL, "history_db_path", config.get("history_db_path", "unknown"))
+    print(f"Using query history at: {query_history_path}")
+    if os.path.exists(query_history_path):
+        print(f"Verified file exists: {os.path.abspath(query_history_path)}")
+        print(f"File size: {os.path.getsize(query_history_path)} bytes")
+    else:
+        print(f"Warning: Query history file doesn't exist yet, it will be created when needed.")
+    
+    if query_history_path.endswith('.sqlite'):
+        print("File has correct .sqlite extension ✓")
+    else:
+        print(f"Warning: File does not have .sqlite extension: {query_history_path}")
+    
+    if query_history_path.startswith(DB_FOLDER):
+        print("File is in the correct database folder ✓")
+    else:
+        print(f"Warning: File is not in the expected database folder: {DB_FOLDER}")
+    print("--- END VERIFICATION ---\n")
+    
     port = int(os.environ.get("PORT", 8080))
     app.run(debug=False, host='0.0.0.0', port=port) 
 

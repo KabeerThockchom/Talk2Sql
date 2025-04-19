@@ -1,12 +1,126 @@
-import React, { useState } from 'react';
+import React, { useState, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
-import { ArrowLeft, BarChart, Clock, RefreshCw, Calendar, CheckCircle, XCircle, Database, LineChart, PieChart } from 'lucide-react';
-import { CollapsibleSection } from './CollapsibleSection';
-import { Tooltip } from './Tooltip';
+import { ArrowLeft, BarChart, Clock, RefreshCw, Calendar, CheckCircle, XCircle, Database, LineChart as LineChartIcon, PieChart as PieChartIcon, Brain, Activity, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { ResponsiveContainer, Line, XAxis, YAxis, LineChart, PieChart, Pie, Cell, Legend, Tooltip as RechartsTooltip, BarChart as RechartsBarChart, Bar } from 'recharts';
+
+// Define brand colors as constants
+const COLORS = {
+  // Primary
+  bookCloth: '#CC785C',
+  kraft: '#D4A27F',
+  manilla: '#EBDBBC',
+  
+  // Secondary
+  slateDark: '#191919',
+  slateMedium: '#262625',
+  slateLight: '#40403E',
+  
+  // Background
+  white: '#FFFFFF',
+  ivoryMedium: '#F0F0EB',
+  ivoryLight: '#FAFAF7',
+};
+
+// CollapsibleSection component
+interface CollapsibleSectionProps {
+  title: string;
+  children: ReactNode;
+  defaultExpanded?: boolean;
+  icon?: ReactNode;
+  className?: string;
+}
+
+function CollapsibleSection({
+  title,
+  children,
+  defaultExpanded = true,
+  icon,
+  className = '',
+}: CollapsibleSectionProps) {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+  const toggleExpanded = () => setIsExpanded(prev => !prev);
+
+  return (
+    <div style={{ backgroundColor: COLORS.white }} className={`rounded-lg shadow-sm overflow-hidden ${className}`}>
+      <button
+        onClick={toggleExpanded}
+        className="w-full px-4 py-3 flex items-center justify-between hover:opacity-80 transition-opacity"
+        style={{ color: COLORS.slateDark }}
+      >
+        <div className="flex items-center gap-2">
+          {icon && <div style={{ color: COLORS.slateMedium }}>{icon}</div>}
+          <h3 className="text-sm font-medium">{title}</h3>
+        </div>
+        {isExpanded ? (
+          <ChevronUp className="w-4 h-4" style={{ color: COLORS.slateMedium }} />
+        ) : (
+          <ChevronDown className="w-4 h-4" style={{ color: COLORS.slateMedium }} />
+        )}
+      </button>
+      
+      {isExpanded && (
+        <div className="px-4 pb-4" style={{ borderTopColor: COLORS.ivoryMedium }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface MetricsPageProps {
   onBack: () => void;
+}
+
+interface MetricsResponse {
+  status?: string;
+  message?: string;
+  total_queries: number;
+  successful_queries: number;
+  error_queries: number;
+  success_rate: number;
+  
+  latency: {
+    p50_total_ms: number;
+    p95_total_ms: number;
+    stage_p95_ms: {
+      generation_ms: number;
+      execution_ms: number;
+      visualization_ms: number;
+      explanation_ms: number;
+    };
+    mean_breakdown_pct: {
+      generation_pct: number;
+      execution_pct: number;
+      visualization_pct: number;
+      explanation_pct: number;
+    };
+  };
+  
+  retry_metrics: {
+    queries_with_retry: number;
+    total_retries: number;
+    retry_rate_pct: number;
+    retry_success_rate_pct: number;
+  };
+  
+  memory_metrics: {
+    queries_with_memory: number;
+    memory_usage_rate_pct: number;
+    with_memory_success_rate_pct: number;
+    without_memory_success_rate_pct: number;
+  };
+  
+  top_errors: Array<{type: string, count: number}>;
+  
+  time_series: {
+    dates: string[];
+    counts: number[];
+    success_counts: number[];
+    success_rates: number[];
+    retries: number[];
+  };
 }
 
 export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
@@ -15,7 +129,7 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['metrics', timeRange],
     queryFn: async () => {
-      const response = await axios.get(`https://text2sql.fly.dev/metrics?time_range=${timeRange}`);
+      const response = await axios.get<MetricsResponse>(`https://text2sql.fly.dev/metrics?time_range=${timeRange}`);
       return response.data;
     }
   });
@@ -36,721 +150,747 @@ export const MetricsPage: React.FC<MetricsPageProps> = ({ onBack }) => {
     }
   };
 
-  const renderBarChart = (data: { type: string, count: number }[], title: string, color: string = 'rgba(99, 102, 241, 0.8)') => {
+  // Add formatDate function if it doesn't exist
+  const formatDate = (dateStr: string): string => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  // Metric Card component for consistent styling
+  const MetricCard = ({ 
+    title, 
+    value, 
+    subtitle = null, 
+    icon = null, 
+    valueColor = COLORS.slateDark
+  }: { 
+    title: string, 
+    value: string | number | React.ReactNode, 
+    subtitle?: string | null, 
+    icon?: React.ReactNode | null,
+    valueColor?: string
+  }) => (
+    <div style={{ backgroundColor: COLORS.white }} className="rounded-lg shadow-sm p-4">
+      <div className="flex items-center mb-1">
+        {icon && <div className="w-5 h-5 mr-2" style={{ color: valueColor }}>{icon}</div>}
+        <h3 className="text-xs font-medium" style={{ color: COLORS.slateMedium }}>{title}</h3>
+      </div>
+      <div className="text-3xl font-bold" style={{ color: valueColor }}>
+        {value}
+      </div>
+      {subtitle && (
+        <div className="text-xs mt-1" style={{ color: COLORS.slateMedium }}>
+          {subtitle}
+        </div>
+      )}
+    </div>
+  );
+
+  // Component for latency breakdown
+  const LatencyBreakdownChart = ({ breakdownData }: { 
+    breakdownData: {
+      generation_pct: number;
+      execution_pct: number;
+      visualization_pct: number;
+      explanation_pct: number;
+    }
+  }) => {
+    const data = [
+      { name: 'SQL Generation', value: breakdownData.generation_pct, color: COLORS.bookCloth },
+      { name: 'SQL Execution', value: breakdownData.execution_pct, color: COLORS.kraft },
+      { name: 'Visualization', value: breakdownData.visualization_pct, color: COLORS.manilla },
+      { name: 'Explanation', value: breakdownData.explanation_pct, color: COLORS.slateMedium }
+    ];
+    
+    return (
+      <div className="space-y-1 mt-2">
+        {data.map((item, index) => (
+          <div key={index} className="flex items-center">
+            <div className="w-24 text-xs truncate mr-1" style={{ color: COLORS.slateMedium }}>{item.name}</div>
+            <div className="flex-1 h-4 rounded-full overflow-hidden" style={{ backgroundColor: COLORS.ivoryMedium }}>
+              <div 
+                className="h-full rounded-full" 
+                style={{ 
+                  width: `${item.value}%`,
+                  backgroundColor: item.color
+                }}
+              ></div>
+            </div>
+            <div className="ml-1 text-xs min-w-[40px] text-right" style={{ color: COLORS.slateMedium }}>
+              {item.value.toFixed(1)}%
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Component for rendering the P95 latency by stage
+  const StageLatencyChart = ({ stageData }: {
+    stageData: {
+      generation_ms: number;
+      execution_ms: number;
+      visualization_ms: number;
+      explanation_ms: number;
+    }
+  }) => {
+    const chartData = [
+      { name: 'Generation', value: stageData.generation_ms },
+      { name: 'Execution', value: stageData.execution_ms },
+      { name: 'Visualization', value: stageData.visualization_ms },
+      { name: 'Explanation', value: stageData.explanation_ms }
+    ];
+
+    return (
+      <div className="w-full h-36 mt-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <RechartsBarChart
+            data={chartData}
+            layout="vertical"
+            margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+            barSize={10}
+          >
+            <XAxis 
+              type="number" 
+              tick={{ fontSize: 10, fill: COLORS.slateMedium }} 
+            />
+            <YAxis 
+              type="category" 
+              dataKey="name" 
+              tick={{ fontSize: 10, fill: COLORS.slateMedium }} 
+              width={80} 
+            />
+            <RechartsTooltip
+              formatter={(value: number) => formatTime(value)}
+              labelFormatter={(label) => `P95 ${label} Latency`}
+              contentStyle={{ backgroundColor: COLORS.white, borderColor: COLORS.ivoryMedium }}
+            />
+            <Bar dataKey="value" radius={4}>
+              {chartData.map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={
+                  index === 0 ? COLORS.bookCloth :
+                  index === 1 ? COLORS.kraft :
+                  index === 2 ? COLORS.manilla :
+                  COLORS.slateMedium
+                } />
+              ))}
+            </Bar>
+          </RechartsBarChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  };
+
+  // For the error bar chart
+  const renderBarChart = (data: { type: string, count: number }[], maxBars: number = 5) => {
     if (!data || data.length === 0) return null;
     
     // Sort by count descending
-    const sortedData = [...data].sort((a, b) => b.count - a.count);
+    const sortedData = [...data].sort((a, b) => b.count - a.count).slice(0, maxBars);
     
     // Get max value for scaling
     const maxCount = Math.max(...sortedData.map(item => item.count));
     
     return (
-      <div className="mt-4">
-        <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">{title}</h3>
-        <div className="space-y-2">
-          {sortedData.map((item, index) => (
-            <div key={index} className="flex items-center">
-              <div className="w-32 text-xs text-neutral-600 dark:text-neutral-400 truncate mr-2">{item.type}</div>
-              <div className="flex-1 h-5 bg-neutral-100 dark:bg-neutral-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full rounded-full" 
-                  style={{ 
-                    width: `${(item.count / maxCount) * 100}%`,
-                    backgroundColor: color
-                  }}
-                ></div>
-              </div>
-              <div className="ml-2 text-xs text-neutral-600 dark:text-neutral-400 min-w-12 text-right">{item.count}</div>
+      <div className="space-y-1 mt-2">
+        {sortedData.map((item, index) => (
+          <div key={index} className="flex items-center">
+            <div className="w-24 text-xs truncate mr-1" style={{ color: COLORS.slateMedium }}>{item.type}</div>
+            <div className="flex-1 h-4 rounded-full overflow-hidden" style={{ backgroundColor: COLORS.ivoryMedium }}>
+              <div 
+                className="h-full rounded-full" 
+                style={{ 
+                  width: `${(item.count / maxCount) * 100}%`,
+                  backgroundColor: COLORS.bookCloth
+                }}
+              ></div>
             </div>
-          ))}
-        </div>
+            <div className="ml-1 text-xs min-w-8 text-right" style={{ color: COLORS.slateMedium }}>{item.count}</div>
+          </div>
+        ))}
       </div>
     );
   };
 
-  const renderLineChart = (
-    labels: string[] | undefined, 
-    datasets: { label: string, data: number[], color: string }[] | undefined,
-    xAxisLabel: string = "Date",
-    yAxisLabel: string = "Value"
-  ) => {
-    if (!labels || !labels.length || !datasets || !datasets.length) return null;
+  // Memory usage chart component
+  const MemoryUsageChart = () => {
+    if (!data || !data.memory_metrics) return null;
     
-    const height = 200;
-    // Ensure enough width for all labels - at least 60px per label
-    const width = Math.max(labels.length * 60, 300);
-    const padding = { top: 20, right: 20, bottom: 50, left: 40 };
-    
-    // Find min and max values for better scaling
-    const allValues = datasets.flatMap(dataset => dataset.data || []).filter(v => v !== undefined && v !== null);
-    const maxValue = Math.max(...allValues) * 1.1 || 1; // 10% padding, default to 1 if empty
-    const minValue = 0; // Set minimum to 0 for better visualization
-    
-    // Scale values to fit in the chart, ensuring proper positioning of zero values
-    const scaleY = (value: number) => {
-      // Return the bottom position for undefined/null values
-      if (value === undefined || value === null) {
-        return height - padding.bottom;
+    const memoryData = [
+      { 
+        name: 'With Memory', 
+        value: data.memory_metrics.queries_with_memory,
+        successRate: data.memory_metrics.with_memory_success_rate_pct 
+      },
+      { 
+        name: 'Without Memory', 
+        value: data.total_queries - data.memory_metrics.queries_with_memory,
+        successRate: data.memory_metrics.without_memory_success_rate_pct 
       }
-      
-      // Calculate the vertical position based on the value's position between min and max
-      const availableHeight = height - padding.top - padding.bottom;
-      const valueRange = maxValue - minValue;
-      const normalizedValue = (value - minValue) / (valueRange === 0 ? 1 : valueRange);
-      return height - padding.bottom - (normalizedValue * availableHeight);
-    };
+    ];
     
-    // Generate x positions
-    const stepX = (width - padding.left - padding.right) / Math.max(labels.length - 1, 1);
-    const xPositions = labels.map((_, i) => padding.left + i * stepX);
+    const chartData = [
+      { name: 'With Memory', value: data.memory_metrics.queries_with_memory, fill: COLORS.kraft },
+      { name: 'Without Memory', value: data.total_queries - data.memory_metrics.queries_with_memory, fill: COLORS.bookCloth }
+    ];
+
+    // Calculate percentages for display
+    const withMemoryPct = data.memory_metrics.queries_with_memory / data.total_queries * 100;
+    const withoutMemoryPct = 100 - withMemoryPct;
     
     return (
-      <div className="relative h-[200px] mt-4 overflow-hidden">
-        <svg width="100%" height={height} style={{ minWidth: width }} className="overflow-visible">
-          {/* Y-axis */}
-          <line 
-            x1={padding.left} 
-            y1={padding.top} 
-            x2={padding.left} 
-            y2={height - padding.bottom} 
-            stroke="currentColor" 
-            className="text-neutral-300 dark:text-neutral-700" 
-            strokeWidth="1"
-          />
-          
-          {/* X-axis */}
-          <line 
-            x1={padding.left} 
-            y1={height - padding.bottom} 
-            x2={width - padding.right} 
-            y2={height - padding.bottom} 
-            stroke="currentColor"
-            className="text-neutral-300 dark:text-neutral-700" 
-            strokeWidth="1"
-          />
-          
-          {/* X-axis label */}
-          <text
-            x={width / 2}
-            y={height - 5}
-            textAnchor="middle"
-            className="text-[10px] fill-neutral-500 dark:fill-neutral-400"
-          >
-            {xAxisLabel}
-          </text>
-          
-          {/* Y-axis label */}
-          <text
-            x={10}
-            y={height / 2}
-            textAnchor="middle"
-            transform={`rotate(-90, 10, ${height / 2})`}
-            className="text-[10px] fill-neutral-500 dark:fill-neutral-400"
-          >
-            {yAxisLabel}
-          </text>
-          
-          {/* Grid lines */}
-          {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-            const value = minValue + (maxValue - minValue) * ratio;
-            const y = scaleY(value);
-            return (
-              <React.Fragment key={i}>
-                <line 
-                  x1={padding.left} 
-                  y1={y} 
-                  x2={width - padding.right} 
-                  y2={y} 
-                  stroke="currentColor" 
-                  className="text-neutral-200 dark:text-neutral-800" 
-                  strokeWidth="1" 
-                  strokeDasharray="3,3"
-                />
-                <text 
-                  x={padding.left - 5} 
-                  y={y} 
-                  textAnchor="end" 
-                  dominantBaseline="middle" 
-                  className="text-[10px] fill-neutral-500 dark:fill-neutral-400"
-                >
-                  {formatNumber(value)}
-                </text>
-              </React.Fragment>
-            );
-          })}
-          
-          {/* X-axis labels - show every nth label to avoid crowding */}
-          {labels.map((label, i) => {
-            // Always show all labels
-            return (
-              <text 
-                key={i} 
-                x={xPositions[i]} 
-                y={height - padding.bottom + 15} 
-                textAnchor="middle" 
-                className="text-[10px] fill-neutral-500 dark:text-neutral-400"
-                transform={`rotate(45, ${xPositions[i]}, ${height - padding.bottom + 15})`}
+      <div className="flex flex-col">
+        <div className="w-full h-36">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                innerRadius={30}
+                outerRadius={50}
+                fill="#8884d8"
+                paddingAngle={5}
+                dataKey="value"
+                labelLine={false}
+                label={false}
               >
-                {label}
-              </text>
-            );
-          })}
-          
-          {/* Datasets */}
-          {datasets.map((dataset, datasetIndex) => {
-            // Skip empty datasets
-            if (!dataset.data || dataset.data.length === 0) return null;
-            
-            // Create path for the line, filtering out undefined/null values
-            let path = '';
-            let started = false;
-            
-            dataset.data.forEach((value, i) => {
-              if (value === undefined || value === null) return;
-              
-              const x = xPositions[i];
-              const y = scaleY(value);
-              
-              if (!started) {
-                path += `M ${x} ${y}`;
-                started = true;
-              } else {
-                path += ` L ${x} ${y}`;
-              }
-            });
-            
-            if (!path) return null; // Skip if no valid points
-            
-            return (
-              <React.Fragment key={datasetIndex}>
-                {/* Line */}
-                <path 
-                  d={path} 
-                  fill="none" 
-                  stroke={dataset.color} 
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                
-                {/* Points */}
-                {dataset.data.map((value, i) => {
-                  if (value === undefined || value === null) return null;
-                  return (
-                    <g key={i}>
-                      <circle 
-                        cx={xPositions[i]} 
-                        cy={scaleY(value)} 
-                        r="3" 
-                        fill={dataset.color}
-                        className="cursor-pointer"
-                        stroke="transparent"
-                        strokeWidth="1"
-                        onMouseOver={(e) => {
-                          e.currentTarget.setAttribute('r', '5');
-                          e.currentTarget.setAttribute('stroke', 'white');
-                        }}
-                        onMouseOut={(e) => {
-                          e.currentTarget.setAttribute('r', '3');
-                          e.currentTarget.setAttribute('stroke', 'transparent');
-                        }}
-                      />
-                      <title>
-                        {labels[i]}: {formatNumber(value)} {dataset.label.split(" ").pop()}
-                      </title>
-                    </g>
-                  );
-                })}
-              </React.Fragment>
-            );
-          })}
-        </svg>
-        
-        {/* Legend */}
-        <div className="flex items-center justify-center mt-2 flex-wrap gap-4">
-          {datasets.map((dataset, i) => (
-            <div key={i} className="flex items-center">
-              <div 
-                className="w-3 h-3 rounded-full mr-1" 
-                style={{ backgroundColor: dataset.color }}
-              ></div>
-              <span className="text-xs text-neutral-600 dark:text-neutral-400">{dataset.label}</span>
-            </div>
-          ))}
+                {chartData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.fill} />
+                ))}
+              </Pie>
+              <RechartsTooltip
+                content={(props: any) => {
+                  const { active, payload } = props;
+                  if (active && payload && payload.length && payload[0] && payload[0].name) {
+                    const item = memoryData.find(d => d.name === payload[0].name);
+                    return (
+                      <div style={{ backgroundColor: COLORS.white, borderColor: COLORS.ivoryMedium }} className="p-2 text-xs border rounded shadow">
+                        <p className="font-medium" style={{ color: COLORS.slateDark }}>{payload[0].name}</p>
+                        <p style={{ color: COLORS.slateMedium }}>Queries: {payload[0].value}</p>
+                        <p style={{ color: COLORS.slateMedium }}>Success Rate: {item ? item.successRate.toFixed(1) : 0}%</p>
+                      </div>
+                    );
+                  }
+                  return null;
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="flex justify-center gap-4 text-xs">
+          <div className="flex items-center">
+            <div className="w-3 h-3 rounded-full mr-1" style={{ backgroundColor: COLORS.kraft }}></div>
+            <span style={{ color: COLORS.slateMedium }}>With Memory {withMemoryPct.toFixed(0)}%</span>
+          </div>
+          <div className="flex items-center">
+            <div className="w-3 h-3 rounded-full mr-1" style={{ backgroundColor: COLORS.bookCloth }}></div>
+            <span style={{ color: COLORS.slateMedium }}>Without Memory {withoutMemoryPct.toFixed(0)}%</span>
+          </div>
+        </div>
+
+        <div className="w-full h-4 bg-gray-200 rounded-full mt-2 overflow-hidden">
+          <div className="flex h-full">
+            <div 
+              style={{ 
+                width: `${withoutMemoryPct}%`, 
+                backgroundColor: COLORS.bookCloth 
+              }} 
+              className="h-full"
+            ></div>
+            <div 
+              style={{ 
+                width: `${withMemoryPct}%`, 
+                backgroundColor: COLORS.kraft 
+              }} 
+              className="h-full"
+            ></div>
+          </div>
         </div>
       </div>
     );
   };
 
-  const renderPieChart = (data: { label: string, value: number, color: string }[]) => {
-    if (!data || data.length === 0) return null;
+  // Retry metrics component
+  const RetryMetricsDisplay = () => {
+    if (!data || !data.retry_metrics) return null;
     
-    const total = data.reduce((acc, item) => acc + item.value, 0);
-    const radius = 80;
-    const center = { x: radius + 20, y: radius + 20 };
-    let startAngle = 0;
+    const retryRateColor = data.retry_metrics.retry_rate_pct > 50 ? COLORS.bookCloth : COLORS.slateMedium;
     
-    // Generate pie slices
-    const slices = data.map((item, index) => {
-      const percentage = item.value / total;
-      const angle = percentage * 360;
-      const endAngle = startAngle + angle;
-      
-      // Convert angles to radians
-      const startRad = (startAngle - 90) * Math.PI / 180;
-      const endRad = (endAngle - 90) * Math.PI / 180;
-      
-      // Calculate path
-      const x1 = center.x + radius * Math.cos(startRad);
-      const y1 = center.y + radius * Math.sin(startRad);
-      const x2 = center.x + radius * Math.cos(endRad);
-      const y2 = center.y + radius * Math.sin(endRad);
-      
-      // Create path
-      const largeArcFlag = angle > 180 ? 1 : 0;
-      const path = `
-        M ${center.x} ${center.y}
-        L ${x1} ${y1}
-        A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}
-        Z
-      `;
-      
-      // Calculate label position (middle of arc)
-      const labelRad = (startRad + endRad) / 2;
-      const labelDistance = radius * 0.7; // slightly inside
-      const labelX = center.x + labelDistance * Math.cos(labelRad);
-      const labelY = center.y + labelDistance * Math.sin(labelRad);
-      
-      // Only show label if slice is big enough
-      const showLabel = percentage > 0.05;
-      
-      // Store the current end angle as the next start angle
-      startAngle = endAngle;
-      
-      return {
-        path,
-        color: item.color,
-        label: item.label,
-        value: item.value,
-        percentage,
-        labelX,
-        labelY,
-        showLabel
-      };
+    return (
+      <div className="flex flex-col gap-2 mt-2">
+        <div className="flex items-center justify-between">
+          <span style={{ color: COLORS.slateMedium }}>Retry Rate:</span>
+          <span className="font-medium" style={{ color: retryRateColor }}>
+            {data.retry_metrics.retry_rate_pct.toFixed(1)}%
+          </span>
+        </div>
+        
+        <div className="flex items-center justify-between">
+          <span style={{ color: COLORS.slateMedium }}>Queries with Retry:</span>
+          <span className="font-medium" style={{ color: COLORS.slateDark }}>
+            {data.retry_metrics.queries_with_retry} ({((data.retry_metrics.queries_with_retry / data.total_queries) * 100).toFixed(1)}%)
+          </span>
+        </div>
+        
+        <div className="flex items-center justify-between">
+          <span style={{ color: COLORS.slateMedium }}>Success After Retry:</span>
+          <span className="font-medium" style={{ color: COLORS.slateDark }}>
+            {data.retry_metrics.retry_success_rate_pct.toFixed(1)}%
+          </span>
+        </div>
+        
+        <div className="flex items-center justify-between">
+          <span style={{ color: COLORS.slateMedium }}>Total Retries:</span>
+          <span className="font-medium" style={{ color: COLORS.slateDark }}>
+            {data.retry_metrics.total_retries}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  // For the dual-axis chart (counts and success rates)
+  const renderPerformanceChart = () => {
+    if (!data || !data.time_series || !data.time_series.dates) return null;
+
+    const chartData = data.time_series.dates.map((date, index) => ({
+      date,
+      count: data.time_series.counts[index],
+      successRate: data.time_series.success_rates[index]
+    }));
+
+    return (
+      <div className="w-full h-48 mt-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <RechartsBarChart
+            data={chartData}
+            margin={{ top: 5, right: 30, left: 0, bottom: 5 }}
+            barSize={20}
+          >
+            <XAxis 
+              dataKey="date" 
+              tickFormatter={formatDate} 
+              tick={{ fill: COLORS.slateMedium }} 
+            />
+            <YAxis 
+              yAxisId="left"
+              orientation="left"
+              tick={{ fontSize: 10, fill: COLORS.slateMedium }}
+              label={{ value: 'Queries', angle: -90, position: 'insideLeft', fontSize: 10, fill: COLORS.slateMedium }}
+            />
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              tickFormatter={(value) => `${value}%`}
+              tick={{ fontSize: 10, fill: COLORS.slateMedium }}
+              label={{ value: 'Success Rate', angle: 90, position: 'insideRight', fontSize: 10, fill: COLORS.slateMedium }}
+              domain={[0, 100]}
+            />
+            <RechartsTooltip
+              content={(props: any) => {
+                const { active, payload, label } = props;
+                if (active && payload && payload.length) {
+                  return (
+                    <div style={{ backgroundColor: COLORS.white, borderColor: COLORS.ivoryMedium }} className="p-2 text-xs border rounded shadow">
+                      <p className="font-medium" style={{ color: COLORS.slateDark }}>{formatDate(label)}</p>
+                      <p style={{ color: COLORS.slateMedium }}>Queries: {payload[0] && payload[0].value}</p>
+                      <p style={{ color: COLORS.slateMedium }}>Success Rate: {payload[1] && payload[1].value ? payload[1].value.toFixed(1) : '0'}%</p>
+                    </div>
+                  );
+                }
+                return null;
+              }}
+            />
+            <Bar 
+              yAxisId="left" 
+              dataKey="count" 
+              fill={COLORS.bookCloth} 
+              radius={[4, 4, 0, 0]}
+              name="Queries"
+            />
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="successRate"
+              stroke={COLORS.kraft}
+              name="Success Rate"
+              strokeWidth={2}
+              dot={{ r: 3 }}
+            />
+          </RechartsBarChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  };
+
+  // Component for displaying custom Calendar metric
+  const CalendarMetric = ({ dates, counts }: { dates: string[], counts: number[] }) => {
+    const today = new Date();
+    const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    
+    // Create data map for lookup
+    const dateMap = new Map();
+    dates.forEach((date, index) => {
+      dateMap.set(date, counts[index]);
     });
     
+    // Create grid of days
+    const days = [];
+    for (let i = 1; i <= daysInMonth; i++) {
+      const date = new Date(today.getFullYear(), today.getMonth(), i);
+      const dateStr = date.toISOString().split('T')[0];
+      const count = dateMap.get(dateStr) || 0;
+      days.push({ date: i, count });
+    }
+    
     return (
-      <div className="flex flex-col md:flex-row items-center justify-center gap-4 mt-4">
-        <svg width={radius * 2 + 40} height={radius * 2 + 40}>
-          {slices.map((slice, i) => (
-            <g key={i}>
-              <path
-                d={slice.path}
-                fill={slice.color}
-                stroke="white"
-                strokeWidth="1"
-              />
-              {slice.showLabel && (
-                <text
-                  x={slice.labelX}
-                  y={slice.labelY}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  className="text-xs font-bold fill-white"
-                >
-                  {Math.round(slice.percentage * 100)}%
-                </text>
-              )}
-            </g>
-          ))}
-        </svg>
-        
-        <div className="flex flex-col gap-2">
-          {slices.map((slice, i) => (
-            <div key={i} className="flex items-center">
-              <div 
-                className="w-3 h-3 rounded-full mr-2" 
-                style={{ backgroundColor: slice.color }}
-              ></div>
-              <span className="text-xs text-neutral-700 dark:text-neutral-300">{slice.label}</span>
-              <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-2">
-                ({formatNumber(slice.value)} - {Math.round(slice.percentage * 100)}%)
-              </span>
+      <div className="mt-4">
+        <div className="flex items-center mb-2">
+          <Calendar className="w-4 h-4 mr-2" style={{ color: COLORS.slateMedium }} />
+          <span className="text-sm font-medium" style={{ color: COLORS.slateDark }}>Activity This Month</span>
+        </div>
+        <div className="grid grid-cols-7 gap-1">
+          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, i) => (
+            <div key={i} className="text-center text-xs" style={{ color: COLORS.slateMedium }}>
+              {day}
             </div>
           ))}
+          
+          {Array(firstDayOfMonth.getDay()).fill(null).map((_, i) => (
+            <div key={`empty-${i}`} className="h-7"></div>
+          ))}
+          
+          {days.map((day) => {
+            const intensity = day.count === 0 ? 0 : Math.min(Math.ceil(day.count / 5), 4);
+            const bgColor = intensity === 0 ? COLORS.ivoryMedium : 
+                          intensity === 1 ? COLORS.manilla :
+                          intensity === 2 ? COLORS.kraft :
+                          intensity === 3 ? COLORS.bookCloth :
+                          COLORS.slateDark;
+            
+            return (
+              <div 
+                key={day.date} 
+                className="h-7 flex items-center justify-center rounded-sm"
+                style={{ 
+                  backgroundColor: bgColor,
+                  color: intensity >= 3 ? COLORS.white : COLORS.slateDark
+                }}
+              >
+                <span className="text-xs">{day.date}</span>
+              </div>
+            );
+          })}
         </div>
+      </div>
+    );
+  };
+
+  // Component for showing comparison chart with Legend
+  const ComparisonChart = ({ successData, errorData }: { 
+    successData: number[],
+    errorData: number[] 
+  }) => {
+    const data = successData.map((val, idx) => ({
+      name: `Day ${idx + 1}`,
+      success: val,
+      error: errorData[idx] || 0
+    }));
+
+    return (
+      <div className="w-full h-48 mt-4">
+        <ResponsiveContainer width="100%" height="100%">
+          <RechartsBarChart
+            data={data}
+            margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+          >
+            <XAxis dataKey="name" />
+            <YAxis />
+            <RechartsTooltip 
+              content={(props: any) => {
+                const { active, payload, label } = props;
+                if (active && payload && payload.length) {
+                  return (
+                    <div style={{ backgroundColor: COLORS.white, borderColor: COLORS.ivoryMedium }} className="p-2 text-xs border rounded shadow">
+                      <p className="font-medium" style={{ color: COLORS.slateDark }}>{label}</p>
+                      <p style={{ color: COLORS.slateMedium }}>Success: {payload[0] && payload[0].value ? payload[0].value : 0}</p>
+                      <p style={{ color: COLORS.slateMedium }}>Error: {payload[1] && payload[1].value ? payload[1].value : 0}</p>
+                    </div>
+                  );
+                }
+                return null;
+              }}
+            />
+            <Legend 
+              verticalAlign="top"
+              height={36}
+              formatter={(value) => <span style={{ color: value === 'success' ? COLORS.bookCloth : COLORS.slateLight }}>{value}</span>}
+            />
+            <Bar dataKey="success" stackId="a" fill={COLORS.bookCloth} />
+            <Bar dataKey="error" stackId="a" fill={COLORS.slateLight} />
+          </RechartsBarChart>
+        </ResponsiveContainer>
       </div>
     );
   };
 
   return (
-    <div className="p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center">
-            <Tooltip content="Return to main view" position="bottom" offset={24}>
-              <button 
-                onClick={onBack}
-                className="flex items-center mr-4 text-neutral-600 dark:text-neutral-300 hover:text-primary"
-              >
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                <span>Back</span>
-              </button>
-            </Tooltip>
-            <h1 className="text-2xl font-semibold text-neutral-900 dark:text-white">Query Analytics</h1>
+    <div className="flex h-screen overflow-hidden" style={{ fontFamily: 'Styrene A, sans-serif', backgroundColor: COLORS.ivoryLight }}>
+      {/* Sidebar */}
+      <aside className="w-[280px] bg-white dark:bg-neutral-800 border-r border-neutral-200 dark:border-neutral-700 flex flex-col">
+        <div className="p-4 border-b border-neutral-200 dark:border-neutral-700">
+          <div className="flex items-center gap-2 mb-4">
+            <Database className="w-6 h-6 text-secondary" style={{ color: COLORS.bookCloth }} />
+            <h1 className="text-lg font-semibold text-neutral-900 dark:text-white">Analytics</h1>
           </div>
-          
-          {/* Time range selector */}
-          <div className="flex items-center gap-2">
-            <div className="text-sm text-neutral-500 dark:text-neutral-400 mr-2 flex items-center">
-              <Calendar className="w-4 h-4 mr-1" />
-              <span>Time Range:</span>
-            </div>
-            <select 
-              value={timeRange}
-              onChange={(e) => setTimeRange(e.target.value as any)}
-              className="bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 text-sm rounded-md px-2 py-1"
-            >
-              <option value="all">All Time</option>
-              <option value="day">Last 24 Hours</option>
-              <option value="week">Last 7 Days</option>
-              <option value="month">Last 30 Days</option>
-            </select>
-            <Tooltip content="Refresh data" position="bottom" offset={24}>
+          <button
+            onClick={onBack}
+            className="w-full flex items-center gap-2 px-4 py-2 bg-neutral-100 dark:bg-neutral-700 rounded-lg text-neutral-600 dark:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-neutral-600 transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Back to App</span>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 mb-2">TIME RANGE</h2>
+          <div className="space-y-1">
+            {[
+              { label: 'All Time', value: 'all' },
+              { label: 'Last 24 Hours', value: 'day' },
+              { label: 'Last 7 Days', value: 'week' },
+              { label: 'Last 30 Days', value: 'month' }
+            ].map(option => (
               <button
-                onClick={() => refetch()}
-                className="p-1.5 bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 rounded-md hover:bg-neutral-200 dark:hover:bg-neutral-600 transition-colors"
+                key={option.value}
+                onClick={() => setTimeRange(option.value as any)}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                  timeRange === option.value
+                    ? 'bg-primary text-white'
+                    : 'text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700'
+                }`}
+                style={{ 
+                  backgroundColor: timeRange === option.value 
+                    ? COLORS.bookCloth 
+                    : 'transparent'
+                }}
               >
-                <RefreshCw className="w-4 h-4" />
+                <Calendar className="w-4 h-4" />
+                <span>{option.label}</span>
               </button>
-            </Tooltip>
+            ))}
           </div>
         </div>
 
-        {isLoading ? (
-          <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-6">
-            <p className="text-neutral-600 dark:text-neutral-300">Loading metrics...</p>
-          </div>
-        ) : error ? (
-          <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-6 border-l-4 border-red-500">
-            <h3 className="text-red-500 font-medium mb-2">Error</h3>
-            <p className="text-neutral-700 dark:text-neutral-300">
-              Failed to load metrics. Please try again.
-            </p>
-          </div>
-        ) : data?.status === "error" ? (
-          <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-6 border-l-4 border-amber-500">
-            <h3 className="text-amber-500 font-medium mb-2">No Data Available</h3>
-            <p className="text-neutral-700 dark:text-neutral-300">
-              {data.message || "No query history available for the selected time range."}
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-6">
-            {/* High-level metrics */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-4">
-                <div className="flex items-center mb-2">
-                  <Database className="w-5 h-5 text-primary mr-2" />
-                  <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Total Queries</h3>
-                </div>
-                <div className="text-2xl font-semibold text-neutral-900 dark:text-white">
-                  {formatNumber(data.total_queries)}
-                </div>
-              </div>
-              
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-4">
-                <div className="flex items-center mb-2">
-                  <CheckCircle className="w-5 h-5 text-green-500 mr-2" />
-                  <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Success Rate</h3>
-                </div>
-                <div className="text-2xl font-semibold text-neutral-900 dark:text-white">
-                  {data.success_rate.toFixed(1)}%
-                </div>
-                <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                  {data.successful_queries} successful / {data.error_queries} failed
-                </div>
-              </div>
-              
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-4">
-                <div className="flex items-center mb-2">
-                  <RefreshCw className="w-5 h-5 text-amber-500 mr-2" />
-                  <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Retry Rate</h3>
-                </div>
-                <div className="text-2xl font-semibold text-neutral-900 dark:text-white">
-                  {data.retry_metrics.retry_success_rate.toFixed(1)}%
-                </div>
-                <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                  {data.retry_metrics.successful_after_retry} fixed after retry
-                </div>
-              </div>
-              
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card p-4">
-                <div className="flex items-center mb-2">
-                  <Clock className="w-5 h-5 text-blue-500 mr-2" />
-                  <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Avg Query Time</h3>
-                </div>
-                <div className="text-2xl font-semibold text-neutral-900 dark:text-white">
-                  {formatTime(data.performance_metrics.avg_total_time_ms)}
-                </div>
-              </div>
+        <div className="p-4 border-t border-neutral-200 dark:border-neutral-700">
+          <button
+            onClick={() => refetch()}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-neutral-100 dark:bg-neutral-700 rounded-lg text-neutral-600 dark:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-neutral-600 transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" style={{ color: COLORS.bookCloth }} />
+            <span>Refresh Data</span>
+          </button>
+        </div>
+      </aside>
+      
+      {/* Main content */}
+      <div className="flex-1 overflow-auto p-4" style={{ backgroundColor: COLORS.ivoryLight }}>
+        <div className="max-w-7xl mx-auto">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-full">
+              <Loader2 className="w-6 h-6 animate-spin" style={{ color: COLORS.slateMedium }} />
+              <p className="ml-2" style={{ color: COLORS.slateMedium }}>Loading metrics...</p>
             </div>
+          ) : error ? (
+            <div className="rounded-lg shadow-sm p-6 border-l-4" style={{ backgroundColor: COLORS.white, borderColor: COLORS.bookCloth }}>
+              <h3 className="font-medium mb-2" style={{ color: COLORS.bookCloth }}>Error</h3>
+              <p style={{ color: COLORS.slateDark }}>
+                Failed to load metrics. Please try again.
+              </p>
+            </div>
+          ) : data?.status === "error" ? (
+            <div className="rounded-lg shadow-sm p-6 border-l-4" style={{ backgroundColor: COLORS.white, borderColor: COLORS.kraft }}>
+              <h3 className="font-medium mb-2" style={{ color: COLORS.kraft }}>No Data Available</h3>
+              <p style={{ color: COLORS.slateDark }}>
+                {data?.message || "No query history available for the selected time range."}
+              </p>
+            </div>
+          ) : data ? (
+            <>
+              <div className="mb-4">
+                <h1 className="text-lg font-semibold" style={{ color: COLORS.slateDark }}>Query Analytics Dashboard</h1>
+                <p className="text-sm" style={{ color: COLORS.slateMedium }}>
+                  {timeRange === 'all' ? 'All-time' : 
+                  timeRange === 'day' ? 'Last 24 hours' :
+                  timeRange === 'week' ? 'Last 7 days' : 'Last 30 days'} metrics based on {data.total_queries} queries
+                </p>
+              </div>
             
-            {/* Main content sections */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Performance Metrics Section */}
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden">
+              {/* KPI row */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+                <MetricCard
+                  title="Total Queries"
+                  value={data.total_queries}
+                  icon={<Database />}
+                  valueColor={COLORS.bookCloth}
+                />
+                
+                <MetricCard
+                  title="Success Rate"
+                  value={`${data.success_rate.toFixed(1)}%`}
+                  subtitle={`${data.successful_queries} successful / ${data.error_queries} failed`}
+                  icon={<CheckCircle />}
+                  valueColor={COLORS.kraft}
+                />
+                
+                <MetricCard
+                  title="Latency (P50 / P95)"
+                  value={`${formatTime(data.latency.p50_total_ms).split(' ')[0]} ${formatTime(data.latency.p50_total_ms).split(' ')[1]}`}
+                  subtitle={`P95: ${formatTime(data.latency.p95_total_ms)}`}
+                  icon={<Clock />}
+                  valueColor={COLORS.manilla}
+                />
+                
+                <MetricCard
+                  title="Retry Stats"
+                  value={`${data.retry_metrics.retry_rate_pct.toFixed(1)}%`}
+                  subtitle={`Success after retry: ${data.retry_metrics.retry_success_rate_pct.toFixed(1)}%`}
+                  icon={<RefreshCw />}
+                  valueColor={COLORS.bookCloth}
+                />
+              </div>
+              
+              {/* Middle row: performance and errors */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
                 <CollapsibleSection 
-                  title="Performance Metrics" 
-                  icon={<Clock className="w-5 h-5 text-neutral-500" />}
-                  defaultExpanded={true}
+                  title="Latency Breakdown" 
+                  icon={<Clock className="w-4 h-4" />}
                 >
-                  <div className="p-4">
-                    <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Query Time Breakdown</h3>
-                    
-                    {/* Time Breakdown Chart */}
-                    <div className="space-y-2 mt-4">
-                      {[
-                        { label: 'SQL Generation', value: data.performance_metrics.avg_sql_generation_time_ms, color: 'rgba(59, 130, 246, 0.8)' },
-                        { label: 'SQL Execution', value: data.performance_metrics.avg_sql_execution_time_ms, color: 'rgba(16, 185, 129, 0.8)' },
-                        { label: 'Visualization', value: data.performance_metrics.avg_visualization_time_ms, color: 'rgba(245, 158, 11, 0.8)' },
-                        { label: 'Summary', value: data.performance_metrics.avg_explanation_time_ms, color: 'rgba(139, 92, 246, 0.8)' }
-                      ].map((item, index) => {
-                        const totalTime = data.performance_metrics.avg_total_time_ms;
-                        const percentage = totalTime > 0 ? (item.value / totalTime) * 100 : 0;
-                        
-                        return (
-                          <div key={index} className="flex items-center">
-                            <div className="w-32 text-xs text-neutral-600 dark:text-neutral-400 truncate mr-2">{item.label}</div>
-                            <div className="flex-1 h-5 bg-neutral-100 dark:bg-neutral-700 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full rounded-full" 
-                                style={{ 
-                                  width: `${percentage}%`,
-                                  backgroundColor: item.color
-                                }}
-                              ></div>
-                            </div>
-                            <div className="ml-2 text-xs text-neutral-600 dark:text-neutral-400 min-w-[80px] text-right">
-                              {formatTime(item.value)} ({percentage.toFixed(1)}%)
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    
-                    {/* Time series chart for performance over time */}
-                    {data?.time_series?.dates?.length > 0 && (
-                      <div className="mt-6">
-                        <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Performance (seconds) Over Time </h3>
-                        {renderLineChart(
-                          data.time_series.dates,
-                          [
-                            { 
-                              label: 'Avg Query Time (seconds)', 
-                              data: data.time_series?.avg_times?.map((ms: number) => ms / 1000) || [],
-                              color: 'rgba(59, 130, 246, 0.8)'
-                            }
-                          ],
-                          "Date",
-                          "Seconds"
-                        )}
-                      </div>
-                    )}
-                  </div>
+                  <LatencyBreakdownChart breakdownData={data.latency.mean_breakdown_pct} />
+                </CollapsibleSection>
+                
+                <CollapsibleSection 
+                  title="Stage P95 Latency" 
+                  icon={<Activity className="w-4 h-4" />}
+                >
+                  <StageLatencyChart stageData={data.latency.stage_p95_ms} />
                 </CollapsibleSection>
               </div>
               
-              {/* Success Rate and Retries Section */}
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden">
-                <CollapsibleSection 
-                  title="Success Rate & Retries" 
-                  icon={<CheckCircle className="w-5 h-5 text-neutral-500" />}
-                  defaultExpanded={true}
-                >
-                  <div className="p-4">
-                    {/* Success/Error Pie Chart */}
-                    <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Query Success Breakdown</h3>
-                    {renderPieChart([
-                      { label: 'Success (First Try)', value: data.successful_queries - data.retry_metrics.successful_after_retry, color: 'rgba(16, 185, 129, 0.8)' },
-                      { label: 'Success (After Retry)', value: data.retry_metrics.successful_after_retry, color: 'rgba(245, 158, 11, 0.8)' },
-                      { label: 'Failed', value: data.error_queries, color: 'rgba(239, 68, 68, 0.8)' }
-                    ])}
-                    
-                    {/* Time series for success rate */}
-                    {data?.time_series?.dates?.length > 0 && (
-                      <div className="mt-6">
-                        <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Success Rate (%) Over Time</h3>
-                        {renderLineChart(
-                          data.time_series.dates,
-                          [
-                            { 
-                              label: 'Success Rate (%)', 
-                              data: data.time_series?.success_rates || [],
-                              color: 'rgba(16, 185, 129, 0.8)'
-                            },
-                            { 
-                              label: 'Retries', 
-                              data: data.time_series?.retries || [],
-                              color: 'rgba(245, 158, 11, 0.8)'
-                            },
-                            {
-                              label: 'Failed',
-                              data: data.time_series?.failed || [],
-                              color: 'rgba(239, 68, 68, 0.8)'
-                            }
-                          ],
-                          "Date",
-                          "Count/Percentage"
-                        )}
-                      </div>
-                    )}
-                    
-                    {/* Retry statistics */}
-                    <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div className="bg-neutral-50 dark:bg-neutral-750 p-3 rounded-lg">
-                        <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Queries with Retries</div>
-                        <div className="text-lg font-semibold text-neutral-900 dark:text-white">
-                          {formatNumber(data.retry_metrics.queries_with_retries)}
-                        </div>
-                        <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                          {((data.retry_metrics.queries_with_retries / data.total_queries) * 100).toFixed(1)}% of total
-                        </div>
-                      </div>
-                      
-                      <div className="bg-neutral-50 dark:bg-neutral-750 p-3 rounded-lg">
-                        <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Total Retries</div>
-                        <div className="text-lg font-semibold text-neutral-900 dark:text-white">
-                          {formatNumber(data.retry_metrics.total_retries)}
-                        </div>
-                        <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                          {formatNumber(data.retry_metrics.avg_retries)} avg per query
-                        </div>
-                      </div>
-                      
-                      <div className="bg-neutral-50 dark:bg-neutral-750 p-3 rounded-lg">
-                        <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Retry Success Rate</div>
-                        <div className="text-lg font-semibold text-neutral-900 dark:text-white">
-                          {formatNumber(data.retry_metrics.retry_success_rate)}%
-                        </div>
-                        <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                          {formatNumber(data.retry_metrics.successful_after_retry)} fixed after retry
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </CollapsibleSection>
-              </div>
-              
-              {/* Error Analysis Section */}
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden">
+              {/* Bottom rows */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
                 <CollapsibleSection 
                   title="Error Analysis" 
-                  icon={<XCircle className="w-5 h-5 text-neutral-500" />}
-                  defaultExpanded={true}
+                  icon={<XCircle className="w-4 h-4" />}
                 >
-                  <div className="p-4">
-                    <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Error Types</h3>
-                    {data.error_analysis && data.error_analysis.length > 0 ? (
-                      renderBarChart(data.error_analysis, 'Common Error Types', 'rgba(239, 68, 68, 0.8)')
+                  <div className="mt-2">
+                    <h3 className="text-sm font-medium" style={{ color: COLORS.slateDark }}>Top Error Types</h3>
+                    {data.top_errors && data.top_errors.length > 0 ? (
+                      renderBarChart(data.top_errors, 5)
                     ) : (
-                      <div className="text-center p-4 bg-neutral-50 dark:bg-neutral-750 rounded-lg">
-                        <p className="text-sm text-neutral-500 dark:text-neutral-400">No errors found in this time period</p>
+                      <div className="text-center p-2 rounded text-xs mt-2" style={{ backgroundColor: COLORS.ivoryMedium, color: COLORS.slateMedium }}>
+                        No errors found in this time period
                       </div>
                     )}
                   </div>
                 </CollapsibleSection>
+                
+                <CollapsibleSection 
+                  title="Retry Metrics" 
+                  icon={<RefreshCw className="w-4 h-4" />}
+                >
+                  <RetryMetricsDisplay />
+                </CollapsibleSection>
               </div>
               
-              {/* Query Patterns Section */}
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
                 <CollapsibleSection 
-                  title="Query Patterns" 
-                  icon={<BarChart className="w-5 h-5 text-neutral-500" />}
-                  defaultExpanded={true}
+                  title="Memory Usage" 
+                  icon={<Brain className="w-4 h-4" />}
                 >
-                  <div className="p-4">
-                    <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Query Types</h3>
-                    {renderBarChart(data.query_pattern_analysis, 'Common Query Patterns', 'rgba(139, 92, 246, 0.8)')}
-                    
-                    {/* Query complexity metrics */}
-                    <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="bg-neutral-50 dark:bg-neutral-750 p-3 rounded-lg">
-                        <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Avg SQL Length</div>
-                        <div className="text-lg font-semibold text-neutral-900 dark:text-white">
-                          {formatNumber(data.complexity_metrics.avg_sql_length)} chars
-                        </div>
-                      </div>
-                      
-                      <div className="bg-neutral-50 dark:bg-neutral-750 p-3 rounded-lg">
-                        <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Avg Result Size</div>
-                        <div className="text-lg font-semibold text-neutral-900 dark:text-white">
-                          {formatNumber(data.complexity_metrics.avg_result_rows)} rows
-                        </div>
-                      </div>
-                    </div>
-                    
-                    {/* Time series for query volume */}
-                    {data?.time_series?.dates?.length > 0 && (
-                      <div className="mt-6">
-                        <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">Query Volume Over Time</h3>
-                        {renderLineChart(
-                          data.time_series.dates,
-                          [{ 
-                            label: 'Queries', 
-                            data: data.time_series?.counts || [],
-                            color: 'rgba(139, 92, 246, 0.8)'
-                          }],
-                          "Date",
-                          "Count"
-                        )}
-                      </div>
+                  <MemoryUsageChart />
+                </CollapsibleSection>
+                
+                <CollapsibleSection 
+                  title="Activity Calendar" 
+                  icon={<Calendar className="w-4 h-4" />}
+                >
+                  <CalendarMetric 
+                    dates={data.time_series.dates}
+                    counts={data.time_series.counts}
+                  />
+                </CollapsibleSection>
+              </div>
+              
+              <div className="grid grid-cols-1 gap-3 mb-3">
+                <CollapsibleSection 
+                  title="Performance Over Time" 
+                  icon={<LineChartIcon className="w-4 h-4" />}
+                >
+                  {renderPerformanceChart()}
+                </CollapsibleSection>
+              </div>
+              
+              <div className="grid grid-cols-1 gap-3">
+                <CollapsibleSection 
+                  title="Success vs Error Comparison" 
+                  icon={<BarChart className="w-4 h-4" />}
+                >
+                  <ComparisonChart 
+                    successData={data.time_series.success_counts}
+                    errorData={data.time_series.counts.map((total, i) => 
+                      total - (data.time_series.success_counts[i] || 0)
                     )}
-                  </div>
+                  />
                 </CollapsibleSection>
-              </div>
-              
-              {/* Visualization Metrics */}
-              <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-card overflow-hidden lg:col-span-2">
+                
                 <CollapsibleSection 
-                  title="Visualization Metrics" 
-                  icon={<PieChart className="w-5 h-5 text-neutral-500" />}
-                  defaultExpanded={true}
+                  title="Distribution Analysis" 
+                  icon={<PieChartIcon className="w-4 h-4" />}
                 >
-                  <div className="p-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div className="bg-neutral-50 dark:bg-neutral-750 p-3 rounded-lg">
-                        <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Visualization Rate</div>
-                        <div className="text-lg font-semibold text-neutral-900 dark:text-white">
-                          {formatNumber(data.complexity_metrics.visualization_rate)}%
-                        </div>
-                        <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                          of successful queries
-                        </div>
-                      </div>
-                      
-                      <div className="bg-neutral-50 dark:bg-neutral-750 p-3 rounded-lg">
-                        <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Avg Visualization Time</div>
-                        <div className="text-lg font-semibold text-neutral-900 dark:text-white">
-                          {formatTime(data.performance_metrics.avg_visualization_time_ms)}
-                        </div>
-                      </div>
-                      
-                      <div className="bg-neutral-50 dark:bg-neutral-750 p-3 rounded-lg">
-                        <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Avg Explanation Time</div>
-                        <div className="text-lg font-semibold text-neutral-900 dark:text-white">
-                          {formatTime(data.performance_metrics.avg_explanation_time_ms)}
-                        </div>
-                      </div>
-                    </div>
+                  <div className="w-full h-48 mt-2">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart
+                        data={data.time_series.dates.map((date, i) => ({
+                          date,
+                          success: data.time_series.success_rates[i],
+                          retries: data.time_series.retries[i]
+                        }))}
+                        margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                      >
+                        <XAxis dataKey="date" tickFormatter={formatDate} />
+                        <YAxis />
+                        <RechartsTooltip 
+                          content={(props: any) => {
+                            const { active, payload, label } = props;
+                            if (active && payload && payload.length) {
+                              return (
+                                <div style={{ backgroundColor: COLORS.white, borderColor: COLORS.ivoryMedium }} className="p-2 text-xs border rounded shadow">
+                                  <p className="font-medium" style={{ color: COLORS.slateDark }}>{formatDate(label)}</p>
+                                  <p style={{ color: COLORS.slateMedium }}>Success Rate: {payload[0] && payload[0].value ? payload[0].value.toFixed(1) : '0'}%</p>
+                                  <p style={{ color: COLORS.slateMedium }}>Retries: {payload[1] && payload[1].value ? payload[1].value : 0}</p>
+                                </div>
+                              );
+                            }
+                            return null;
+                          }}
+                        />
+                        <Legend />
+                        <Line type="monotone" dataKey="success" stroke={COLORS.bookCloth} name="Success Rate %" />
+                        <Line type="monotone" dataKey="retries" stroke={COLORS.kraft} name="Retries" />
+                      </LineChart>
+                    </ResponsiveContainer>
                   </div>
                 </CollapsibleSection>
               </div>
-            </div>
-          </div>
-        )}
+            </>
+          ) : null}
+        </div>
       </div>
     </div>
   );
-}; 
+};
