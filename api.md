@@ -73,7 +73,7 @@ curl -X POST http://localhost:8080/connect \
   -H "Content-Type: application/json" \
   -d '{"db_path": "/databases/query_history.sqlite"}'
 ```
-/Users/kabeerthockchom/Desktop/sqlmind/databases/query_history.sqlite
+
 ### List Databases
 
 Lists all available databases in the configured database folder.
@@ -574,15 +574,56 @@ Gets evaluation metrics about query history and performance.
 - `limit`: Maximum number of history items to analyze
 
 **Response:**
-Detailed metrics including:
-- High-level metrics (total queries, success rate, etc.)
-- Retry metrics
-- Performance metrics
-- SQL analysis
-- Error analysis
-- Query pattern analysis
-- Memory usage metrics
-- Time series data
+```json
+{
+  "status": "success",
+  "total_queries": 100,
+  "successful_queries": 85,
+  "error_queries": 15,
+  "success_rate": 85.0,
+  "latency": {
+    "p50_total_ms": 1200,
+    "p95_total_ms": 3500,
+    "stage_p95_ms": {
+      "generation_ms": 2000,
+      "execution_ms": 500,
+      "visualization_ms": 300,
+      "explanation_ms": 700
+    },
+    "mean_breakdown_pct": {
+      "generation_pct": 60,
+      "execution_pct": 15,
+      "visualization_pct": 10,
+      "explanation_pct": 15
+    }
+  },
+  "retry_metrics": {
+    "queries_with_retry": 20,
+    "total_retries": 25,
+    "retry_rate_pct": 20.0,
+    "retry_success_rate_pct": 75.0
+  },
+  "memory_metrics": {
+    "queries_with_memory": 30,
+    "memory_usage_rate_pct": 30.0,
+    "with_memory_success_rate_pct": 90.0,
+    "without_memory_success_rate_pct": 82.85
+  },
+  "top_errors": [
+    {"type": "syntax_error", "count": 8},
+    {"type": "table_not_found", "count": 4},
+    {"type": "column_not_found", "count": 2},
+    {"type": "permission", "count": 1}
+  ],
+  "time_series": {
+    "dates": ["2023-05-01", "2023-05-02", "2023-05-03"],
+    "counts": [25, 35, 40],
+    "success_counts": [20, 30, 35],
+    "success_rates": [80.0, 85.71, 87.5],
+    "retries": [5, 8, 7]
+  }
+}
+```
 
 **Example:**
 
