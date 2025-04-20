@@ -10,9 +10,9 @@ import numpy as np
 import base64
 import hashlib
 from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
-from talk2sql.engine import Talk2SQLAzure
-# from talk2sql.engine import Talk2SQLAnthropic
-from talk2sql.utils import format_sql_with_xml_tags, extract_content_from_xml_tags
+from Talk2SQL.engine import Talk2SQLAzure
+# from Talk2SQL.engine import Talk2SQLAnthropic
+from Talk2SQL.utils import format_sql_with_xml_tags, extract_content_from_xml_tags
 import groq
 import threading
 import sqlite3
@@ -25,6 +25,7 @@ import statistics
 import traceback
 import uuid
 from collections import Counter, defaultdict
+import re
 
 try:
     from dotenv import load_dotenv
@@ -58,7 +59,7 @@ config = {
     # Retry settings
     "max_retry_attempts": 3,
     "save_query_history": True,
-    "history_db_path": os.path.join(DB_FOLDER, "query_history.sqlite"),  # Store query history in databases folder
+    "history_db_path": os.path.join(DB_FOLDER, "query_history.sqlit"),  # Store query history in databases folder
     
     # General settings
     "debug_mode": True,
@@ -114,7 +115,7 @@ os.makedirs(TRAINING_DATA_FOLDER, exist_ok=True)
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
 
 print(f"Created or verified database folder at: {DB_FOLDER}")
-print(f"Expected query history location: {os.path.join(DB_FOLDER, 'query_history.sqlite')}")
+print(f"Expected query history location: {os.path.join(DB_FOLDER, 'query_history.sqlit')}")
 
 # Store the current database path
 current_db_path = None
@@ -260,6 +261,17 @@ def connect_to_database():
         else:
             examples_loaded = True
             print("Using existing training examples from vector store")
+        
+        # Generate starter questions when connecting to a database
+        starter_questions = []
+        if schema:
+            try:
+                # Generate 5 starter questions based on the schema
+                starter_questions = Talk2SQL.generate_starter_questions(schema, 5)
+                print(f"Generated {len(starter_questions)} starter questions")
+            except Exception as e:
+                print(f"Error generating starter questions: {e}")
+                # Don't let this error prevent connection
             
         return jsonify({
             "status": "success", 
@@ -268,7 +280,8 @@ def connect_to_database():
             "examples_loaded": examples_loaded,
             "db_name": current_db_name,
             "using_persistent_vectors": using_persistent_vectors,
-            "thread_safe": True
+            "thread_safe": True,
+            "starter_questions": starter_questions
         })
     except Exception as e:
         print(f"Error connecting to database: {str(e)}")
@@ -2342,6 +2355,840 @@ def get_metrics():
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(exc)}), 500
 
+
+# @app.route('/starter_questions', methods=['GET'])
+# def get_starter_questions():
+#     """
+#     Get starter questions for the database.
+#     Uses the connected database to generate relevant example questions.
+#     """
+#     try:
+#         # Get database path from query parameter, fallback to the global connection
+#         db_path = request.args.get('db_path')
+        
+#         # Detailed debug logs
+#         app.logger.info(f"[STARTER_QUESTIONS] Request received with db_path: {db_path}")
+#         app.logger.info(f"[STARTER_QUESTIONS] All request args: {dict(request.args)}")
+        
+#         if not db_path:
+#             app.logger.error("[STARTER_QUESTIONS] No database path provided")
+#             return jsonify({"status": "error", "message": "Database path is required"}), 400
+        
+#         # Get database name from path for tailoring questions
+#         db_name = os.path.basename(db_path).lower()
+#         app.logger.info(f"[STARTER_QUESTIONS] Database name: {db_name}")
+        
+#         # Create a temporary connection to get schema info
+#         schema_info = ""
+#         temp_conn = None
+        
+#         try:
+#             # Connect to the database to get schema
+#             app.logger.info(f"[STARTER_QUESTIONS] Connecting to database: {db_path}")
+#             temp_conn = sqlite3.connect(db_path)
+#             cursor = temp_conn.cursor()
+            
+#             # Get table list
+#             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+#             tables = cursor.fetchall()
+#             table_names = [table[0] for table in tables]
+            
+#             app.logger.info(f"[STARTER_QUESTIONS] Found tables: {table_names}")
+            
+#             # Get schema details for each table
+#             for table_name in table_names:
+#                 schema_info += f"Table: {table_name}\n"
+#                 cursor.execute(f"PRAGMA table_info({table_name})")
+#                 columns = cursor.fetchall()
+#                 for col in columns:
+#                     schema_info += f"  - {col[1]} ({col[2]})\n"
+#                 schema_info += "\n"
+                
+#                 # For the first few tables, also get sample data count
+#                 if tables.index((table_name,)) < 3:
+#                     try:
+#                         cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+#                         count = cursor.fetchone()[0]
+#                         schema_info += f"  Count: {count} rows\n\n"
+#                     except:
+#                         pass
+#         except Exception as e:
+#             app.logger.error(f"[STARTER_QUESTIONS] Error getting schema: {str(e)}")
+#             schema_info = "Error getting schema"
+#         finally:
+#             # Close the temporary connection
+#             if temp_conn:
+#                 temp_conn.close()
+#                 app.logger.info("[STARTER_QUESTIONS] Temporary connection closed")
+        
+#         # Generate database-specific questions
+#         count = request.args.get('count', default=10, type=int)
+#         questions = []
+        
+#         # STEP 1: Generate database-specific questions based on name
+#         if 'pokemon' in db_name:
+#             app.logger.info("[STARTER_QUESTIONS] Using pokemon-specific questions")
+#             questions = [
+#                 "What are the names and Pokedex numbers of all Pokémon classified as 'Starter'?",
+#                 "How many Pokémon are there in each generation?",
+#                 "Which Pokémon have the highest attack stats?",
+#                 "List all Legendary Pokémon and their types",
+#                 "What is the distribution of Pokémon by type?",
+#                 "Which Pokémon can evolve and what are their evolutions?",
+#                 "What are the top 10 Pokémon by total base stats?",
+#                 "How many Pokémon have dual types?",
+#                 "What is the average height and weight by type?",
+#                 "Which Pokémon have unique type combinations?"
+#             ]
+#         elif 'nba' in db_name:
+#             app.logger.info("[STARTER_QUESTIONS] Using NBA-specific questions")
+#             questions = [
+#                 "Who are the top 10 scorers in the NBA?",
+#                 "What teams have won the most championships?",
+#                 "Which players have the highest field goal percentage?",
+#                 "What was the average points per game last season?",
+#                 "Who are the tallest players in the league?",
+#                 "Which teams had the most wins in the last season?",
+#                 "Who are the top 5 players with the most assists?",
+#                 "What is the distribution of player heights across different positions?",
+#                 "Which players have scored the most 3-pointers?",
+#                 "What is the correlation between player salary and performance stats?"
+#             ]
+#         elif 'fifa' in db_name:
+#             app.logger.info("[STARTER_QUESTIONS] Using FIFA-specific questions")
+#             questions = [
+#                 "Who are the top-rated players in the game?",
+#                 "Which teams have the highest overall ratings?",
+#                 "Who are the fastest players in the game?",
+#                 "What is the distribution of player nationalities?",
+#                 "Which players have the highest potential growth?",
+#                 "Who are the best goalkeepers in the game?",
+#                 "What is the average age of players by league?",
+#                 "Which players have the best shooting stats?",
+#                 "What positions have the highest average wages?",
+#                 "Who are the best young players under 21 years old?"
+#             ]
+#         else:
+#             # STEP 2: For other databases, generate schema-specific questions
+#             app.logger.info("[STARTER_QUESTIONS] Generating schema-based questions")
+            
+#             # Default generic questions that work for any database
+#             generic_questions = [
+#                 "What tables are in this database?",
+#                 "Show me the first 10 records from the main table",
+#                 "What is the count of records in each table?",
+#                 "How many unique values are in each column?",
+#                 "What are the minimum and maximum values for numeric columns?"
+#             ]
+            
+#             # Add table-specific questions if we have schema info
+#             table_specific_questions = []
+            
+#             if table_names:
+#                 # Extract table names from schema
+#                 for table_name in table_names[:3]:  # Use first 3 tables for questions
+#                     table_specific_questions.append(f"Show me all columns from the {table_name} table")
+#                     table_specific_questions.append(f"How many records are in the {table_name} table?")
+                    
+#                     # Get column names for this table to ask more specific questions
+#                     try:
+#                         cursor = temp_conn.cursor() if temp_conn else None
+#                         if cursor:
+#                             cursor.execute(f"PRAGMA table_info({table_name})")
+#                             columns = cursor.fetchall()
+#                             column_names = [col[1] for col in columns]
+                            
+#                             # Add column-specific questions
+#                             if len(column_names) >= 2:
+#                                 col1, col2 = column_names[0], column_names[1]
+#                                 table_specific_questions.append(f"What are the most common values in the {col1} column of the {table_name} table?")
+#                                 table_specific_questions.append(f"Show me the relationship between {col1} and {col2} in the {table_name} table")
+#                     except:
+#                         pass
+                
+#                 # Add relationship questions if we have multiple tables
+#                 if len(table_names) >= 2:
+#                     table_specific_questions.append(f"Show me any relationships between {table_names[0]} and {table_names[1]}")
+                
+#                 # Combine questions, prioritizing table-specific ones
+#                 questions = table_specific_questions + generic_questions
+#             else:
+#                 questions = generic_questions
+        
+#         # Limit to requested count and ensure uniqueness
+#         questions = list(dict.fromkeys(questions))[:count]
+        
+#         app.logger.info(f"[STARTER_QUESTIONS] Final questions to return: {questions}")
+        
+#         return jsonify({
+#             "status": "success", 
+#             "questions": questions,
+#             "debug_info": {
+#                 "db_path": db_path,
+#                 "db_name": db_name,
+#                 "schema_length": len(schema_info),
+#                 "tables_found": table_names if 'table_names' in locals() else [],
+#                 "questions_count": len(questions)
+#             }
+#         })
+        
+#     except Exception as e:
+#         app.logger.error(f"[STARTER_QUESTIONS] General error in endpoint: {str(e)}")
+#         traceback_str = traceback.format_exc()
+#         app.logger.error(f"[STARTER_QUESTIONS] Traceback: {traceback_str}")
+        
+#         return jsonify({
+#             "status": "error", 
+#             "message": str(e),
+#             "traceback": traceback_str,
+#             "debug_info": {
+#                 "error": str(e),
+#                 "db_path": request.args.get('db_path', "not provided")
+#             }
+#         }), 500
+
+@app.route('/starter_questions', methods=['GET'])
+def get_starter_questions():
+    """
+    Get starter questions for the database.
+    Uses the connected database to generate relevant example questions.
+    """
+    try:
+        # Get database path from query parameter, fallback to the global connection
+        db_path = request.args.get('db_path')
+        
+        # Detailed debug logs
+        app.logger.info(f"[STARTER_QUESTIONS] Request received with db_path: {db_path}")
+        app.logger.info(f"[STARTER_QUESTIONS] All request args: {dict(request.args)}")
+        
+        if not db_path:
+            app.logger.error("[STARTER_QUESTIONS] No database path provided")
+            return jsonify({"status": "error", "message": "Database path is required"}), 400
+        
+        # Get database name from path for tailoring questions
+        db_name = os.path.basename(db_path).lower()
+        app.logger.info(f"[STARTER_QUESTIONS] Database name: {db_name}")
+        
+        # Create a temporary connection to get schema info
+        schema_info = ""
+        temp_conn = None
+        
+        try:
+            # Connect to the database to get schema
+            app.logger.info(f"[STARTER_QUESTIONS] Connecting to database: {db_path}")
+            temp_conn = sqlite3.connect(db_path)
+            cursor = temp_conn.cursor()
+            
+            # Get table list
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            tables = cursor.fetchall()
+            table_names = [table[0] for table in tables]
+            
+            app.logger.info(f"[STARTER_QUESTIONS] Found tables: {table_names}")
+            
+            # Get schema details for each table
+            for table_name in table_names:
+                schema_info += f"Table: {table_name}\n"
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = cursor.fetchall()
+                for col in columns:
+                    schema_info += f"  - {col[1]} ({col[2]})\n"
+                schema_info += "\n"
+                
+                # For the first few tables, also get sample data count
+                if tables.index((table_name,)) < 3:
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                        count = cursor.fetchone()[0]
+                        schema_info += f"  Count: {count} rows\n\n"
+                    except:
+                        pass
+        except Exception as e:
+            app.logger.error(f"[STARTER_QUESTIONS] Error getting schema: {str(e)}")
+            schema_info = "Error getting schema"
+        finally:
+            # Close the temporary connection
+            if temp_conn:
+                temp_conn.close()
+                app.logger.info("[STARTER_QUESTIONS] Temporary connection closed")
+        
+        # Get the requested number of questions
+        count = request.args.get('count', default=10, type=int)
+        
+        # Use Talk2SQL.generate_starter_questions to generate questions
+        app.logger.info("[STARTER_QUESTIONS] Using Talk2SQL to generate schema-based questions")
+        question_objects = Talk2SQL.generate_starter_questions(schema_info, count)
+        
+        # Extract just the questions from the returned objects
+        questions = [q['question'] for q in question_objects]
+        
+        app.logger.info(f"[STARTER_QUESTIONS] Final questions to return: {questions}")
+        
+        return jsonify({
+            "status": "success", 
+            "questions": questions,
+            "debug_info": {
+                "db_path": db_path,
+                "db_name": db_name,
+                "schema_length": len(schema_info),
+                "tables_found": table_names if 'table_names' in locals() else [],
+                "questions_count": len(questions)
+            }
+        })
+        
+    except Exception as e:
+        app.logger.error(f"[STARTER_QUESTIONS] General error in endpoint: {str(e)}")
+        traceback_str = traceback.format_exc()
+        app.logger.error(f"[STARTER_QUESTIONS] Traceback: {traceback_str}")
+        
+        return jsonify({
+            "status": "error", 
+            "message": str(e),
+            "traceback": traceback_str,
+            "debug_info": {
+                "error": str(e),
+                "db_path": request.args.get('db_path', "not provided")
+            }
+        }), 500
+
+@app.route('/add_documentation', methods=['POST'])
+def add_documentation():
+    """
+    Add documentation to the connected SQLite database for improved context in queries.
+    The documentation will be stored in the vector database for retrieval during queries.
+    """
+    try:
+        if not Talk2SQL:
+            return jsonify({"success": False, "error": "No database connection"}), 400
+            
+        data = request.json
+        if not data or 'documentation' not in data:
+            return jsonify({"success": False, "error": "Documentation text is required"}), 400
+            
+        documentation = data['documentation']
+        doc_id = Talk2SQL.add_documentation(documentation)
+        
+        return jsonify({
+            "success": True,
+            "message": "Documentation added successfully",
+            "id": doc_id
+        })
+    except Exception as e:
+        app.logger.error(f"Error adding documentation: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/training_data', methods=['GET', 'POST', 'DELETE'])
+def manage_training_data():
+    """
+    Manage training data for the Talk2SQL system.
+    GET: Retrieve all training data
+    POST: Add new training example
+    DELETE: Remove training example by ID
+    """
+    try:
+        if not Talk2SQL:
+            return jsonify({"success": False, "error": "No database connection"}), 400
+            
+        # GET - Retrieve all training data
+        if request.method == 'GET':
+            all_data = Talk2SQL.get_all_training_data()
+            return jsonify({
+                "success": True,
+                "data": all_data.to_dict(orient='records')
+            })
+            
+        # POST - Add new training example
+        elif request.method == 'POST':
+            data = request.json
+            if not data:
+                return jsonify({"success": False, "error": "Invalid request data"}), 400
+                
+            # Add question-SQL pair
+            if 'question' in data and 'sql' in data:
+                example_id = Talk2SQL.add_question_sql(data['question'], data['sql'])
+                return jsonify({
+                    "success": True,
+                    "message": "Training example added successfully",
+                    "id": example_id
+                })
+            # Add schema information
+            elif 'schema' in data:
+                schema_id = Talk2SQL.add_schema(data['schema'])
+                return jsonify({
+                    "success": True, 
+                    "message": "Schema added successfully",
+                    "id": schema_id
+                })
+            # Add documentation
+            elif 'documentation' in data:
+                doc_id = Talk2SQL.add_documentation(data['documentation'])
+                return jsonify({
+                    "success": True,
+                    "message": "Documentation added successfully",
+                    "id": doc_id
+                })
+            else:
+                return jsonify({"success": False, "error": "Missing required fields"}), 400
+                
+        # DELETE - Remove training example
+        elif request.method == 'DELETE':
+            data = request.json
+            if not data or 'id' not in data:
+                return jsonify({"success": False, "error": "ID is required"}), 400
+                
+            success = Talk2SQL.remove_training_data(data['id'])
+            if success:
+                return jsonify({
+                    "success": True,
+                    "message": "Training data removed successfully"
+                })
+            else:
+                return jsonify({"success": False, "error": "Failed to remove training data"}), 500
+    except Exception as e:
+        app.logger.error(f"Error managing training data: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/schema_visualization', methods=['GET'])
+def get_schema_visualization():
+    """
+    Generate a visualization of the database schema in a tree-like format.
+    This provides a quick overview of tables, columns, and relationships.
+    """
+    try:
+        if not Talk2SQL or not Talk2SQL.conn:
+            return jsonify({"success": False, "error": "No database connection"}), 400
+            
+        # Get database schema
+        schema_info = get_db_schema()
+        
+        # Format the schema as a tree structure for visualization
+        schema_tree = format_schema_as_tree(schema_info['tables'])
+        
+        return jsonify({
+            "success": True,
+            "schema": schema_tree
+        })
+    except Exception as e:
+        app.logger.error(f"Error generating schema visualization: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+def format_schema_as_tree(tables):
+    """
+    Format database schema as a tree structure for visualization.
+    
+    Args:
+        tables: Dictionary of tables and their columns
+        
+    Returns:
+        Tree structure of the schema
+    """
+    tree = []
+    
+    for table_name, table_info in tables.items():
+        table_node = {
+            "id": f"table-{table_name}",
+            "name": table_name,
+            "type": "table",
+            "children": []
+        }
+        
+        # Add columns as children
+        for column in table_info['columns']:
+            column_node = {
+                "id": f"column-{table_name}-{column['name']}",
+                "name": column['name'],
+                "type": "column",
+                "dataType": column['type'],
+                "isPrimaryKey": column['pk'] == 1,
+                "isNullable": column['notnull'] == 0
+            }
+            table_node["children"].append(column_node)
+            
+        # Add foreign keys if available
+        if 'foreign_keys' in table_info:
+            for fk in table_info['foreign_keys']:
+                for column_name, reference in fk.items():
+                    # Find the column node
+                    for column in table_node["children"]:
+                        if column["name"] == column_name:
+                            column["isForeignKey"] = True
+                            column["references"] = reference
+                            break
+        
+        tree.append(table_node)
+    
+    return tree
+
+@app.route('/update_documentation', methods=['PUT'])
+def update_documentation():
+    """
+    Update existing documentation by ID.
+    """
+    try:
+        if not Talk2SQL:
+            return jsonify({"success": False, "error": "No database connection"}), 400
+            
+        data = request.json
+        if not data or 'id' not in data or 'documentation' not in data:
+            return jsonify({"success": False, "error": "Documentation ID and text are required"}), 400
+            
+        doc_id = data['id']
+        documentation = data['documentation']
+        
+        # First delete the existing documentation
+        success = Talk2SQL.remove_training_data(doc_id)
+        if not success:
+            return jsonify({"success": False, "error": "Failed to update documentation: ID not found"}), 404
+            
+        # Then add the new documentation (will get a new ID)
+        new_doc_id = Talk2SQL.add_documentation(documentation)
+        
+        return jsonify({
+            "success": True,
+            "message": "Documentation updated successfully",
+            "old_id": doc_id,
+            "new_id": new_doc_id
+        })
+    except Exception as e:
+        app.logger.error(f"Error updating documentation: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/bulk_training_data', methods=['POST'])
+def bulk_manage_training_data():
+    """
+    Bulk operations for training data.
+    - Upload multiple training examples at once
+    - Reset entire collections
+    """
+    try:
+        if not Talk2SQL:
+            return jsonify({"success": False, "error": "No database connection"}), 400
+            
+        data = request.json
+        if not data or 'operation' not in data:
+            return jsonify({"success": False, "error": "Operation type is required"}), 400
+            
+        operation = data['operation']
+        
+        # Bulk upload operation
+        if operation == 'bulk_upload':
+            if 'examples' not in data or not isinstance(data['examples'], list):
+                return jsonify({"success": False, "error": "Examples list is required for bulk upload"}), 400
+                
+            results = []
+            for example in data['examples']:
+                try:
+                    if 'question' in example and 'sql' in example:
+                        example_id = Talk2SQL.add_question_sql(example['question'], example['sql'])
+                        results.append({"id": example_id, "type": "question", "success": True})
+                    elif 'schema' in example:
+                        schema_id = Talk2SQL.add_schema(example['schema'])
+                        results.append({"id": schema_id, "type": "schema", "success": True})
+                    elif 'documentation' in example:
+                        doc_id = Talk2SQL.add_documentation(example['documentation'])
+                        results.append({"id": doc_id, "type": "documentation", "success": True})
+                    else:
+                        results.append({"error": "Invalid example format", "success": False})
+                except Exception as e:
+                    results.append({"error": str(e), "success": False})
+                    
+            return jsonify({
+                "success": True,
+                "message": f"Processed {len(results)} examples",
+                "results": results
+            })
+            
+        # Reset collection operation
+        elif operation == 'reset_collection':
+            if 'collection_type' not in data:
+                return jsonify({"success": False, "error": "Collection type is required for reset operation"}), 400
+                
+            collection_type = data['collection_type']
+            if collection_type not in ['questions', 'schema', 'docs']:
+                return jsonify({"success": False, "error": "Invalid collection type. Must be one of: questions, schema, docs"}), 400
+                
+            success = Talk2SQL.reset_collection(collection_type)
+            if success:
+                return jsonify({
+                    "success": True,
+                    "message": f"Collection '{collection_type}' reset successfully"
+                })
+            else:
+                return jsonify({"success": False, "error": f"Failed to reset collection '{collection_type}'"}), 500
+                
+        else:
+            return jsonify({"success": False, "error": f"Unknown operation: {operation}"}), 400
+            
+    except Exception as e:
+        app.logger.error(f"Error in bulk training data operation: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/training_data_stats', methods=['GET'])
+def get_training_data_stats():
+    """
+    Get statistics about the training data.
+    """
+    try:
+        if not Talk2SQL:
+            return jsonify({"success": False, "error": "No database connection"}), 400
+            
+        # Get all training data
+        all_data = Talk2SQL.get_all_training_data()
+        
+        # Calculate statistics
+        total_count = len(all_data)
+        questions_count = len(all_data[all_data['type'] == 'question'])
+        schema_count = len(all_data[all_data['type'] == 'schema'])
+        docs_count = len(all_data[all_data['type'] == 'documentation'])
+        
+        return jsonify({
+            "success": True,
+            "stats": {
+                "total_count": total_count,
+                "questions_count": questions_count,
+                "schema_count": schema_count,
+                "docs_count": docs_count
+            }
+        })
+    except Exception as e:
+        app.logger.error(f"Error getting training data stats: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/debug_starter_questions', methods=['GET'])
+def debug_starter_questions():
+    """
+    Diagnostic endpoint to check if the generate_starter_questions method is working.
+    """
+    try:
+        db_path = request.args.get('db_path')
+        schema = request.args.get('schema')
+        
+        app.logger.info(f"[DEBUG] Received debug request for starter questions. db_path: {db_path}, schema provided: {schema is not None}")
+        
+        # Create a response object to track the process
+        response_data = {
+            "status": "processing",
+            "steps": [],
+            "final_status": None,
+            "final_questions": None
+        }
+        
+        # Step 1: Check if Talk2SQL instance exists
+        response_data["steps"].append({
+            "step": "Check Talk2SQL instance",
+            "status": "Talk2SQL exists" if Talk2SQL else "Talk2SQL does not exist"
+        })
+        
+        # Step 2: Check if the method exists
+        has_method = hasattr(Talk2SQL, 'generate_starter_questions') if Talk2SQL else False
+        response_data["steps"].append({
+            "step": "Check method existence",
+            "status": "Method exists" if has_method else "Method does not exist"
+        })
+        
+        # Try the different methods of generating questions
+        if Talk2SQL and has_method:
+            try:
+                # Try using existing Talk2SQL
+                app.logger.info("[DEBUG] Trying existing Talk2SQL instance")
+                response_data["steps"].append({
+                    "step": "Try existing Talk2SQL instance",
+                    "status": "attempting"
+                })
+                
+                # If schema was provided, use it, otherwise generate from the database
+                if not schema and db_path:
+                    # Get schema from database
+                    schema_info = ""
+                    try:
+                        # Connect temporarily if needed
+                        if not Talk2SQL.conn:
+                            app.logger.info(f"[DEBUG] Connecting to {db_path}")
+                            Talk2SQL.connect_to_sqlite(db_path)
+                            
+                        cursor = Talk2SQL.conn.cursor()
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+                        tables = cursor.fetchall()
+                        
+                        for table in tables:
+                            table_name = table[0]
+                            schema_info += f"Table: {table_name}\n"
+                            cursor.execute(f"PRAGMA table_info({table_name})")
+                            columns = cursor.fetchall()
+                            for col in columns:
+                                schema_info += f"  - {col[1]} ({col[2]})\n"
+                            schema_info += "\n"
+                    except Exception as e:
+                        app.logger.error(f"[DEBUG] Error getting schema: {str(e)}")
+                        response_data["steps"].append({
+                            "step": "Get schema",
+                            "status": f"failed: {str(e)}"
+                        })
+                        schema_info = "Error getting schema"
+                else:
+                    schema_info = schema or "No schema provided"
+                
+                response_data["steps"].append({
+                    "step": "Get schema",
+                    "status": "success",
+                    "schema_length": len(schema_info),
+                    "schema_preview": schema_info[:100] + "..." if len(schema_info) > 100 else schema_info
+                })
+                
+                # Now try to generate questions
+                questions = Talk2SQL.generate_starter_questions(schema_info, 5)
+                
+                response_data["steps"].append({
+                    "step": "Generate questions with Talk2SQL",
+                    "status": "success", 
+                    "questions": questions
+                })
+                
+                response_data["final_status"] = "success"
+                response_data["final_questions"] = questions
+                
+            except Exception as e:
+                app.logger.error(f"[DEBUG] Error using existing Talk2SQL: {str(e)}")
+                response_data["steps"].append({
+                    "step": "Try existing Talk2SQL instance",
+                    "status": f"failed: {str(e)}"
+                })
+        
+        # Try with a new instance
+        if not response_data["final_questions"]:
+            try:
+                app.logger.info("[DEBUG] Trying with new Talk2SQL instance")
+                response_data["steps"].append({
+                    "step": "Try new Talk2SQL instance",
+                    "status": "attempting"
+                })
+                
+                # Create a new instance
+                from Talk2SQL.engine.Talk2SQL import Talk2SQL
+                new_instance = Talk2SQL()
+                
+                # Check if the method exists on the new instance
+                new_has_method = hasattr(new_instance, 'generate_starter_questions')
+                response_data["steps"].append({
+                    "step": "Check method on new instance",
+                    "status": "Method exists" if new_has_method else "Method does not exist"
+                })
+                
+                if new_has_method:
+                    # If schema was provided, use it, otherwise use a simple test schema
+                    if not schema:
+                        schema = """
+                        Table: users
+                          - id (INTEGER)
+                          - name (TEXT)
+                          - email (TEXT)
+                        
+                        Table: orders
+                          - id (INTEGER)
+                          - user_id (INTEGER)
+                          - amount (REAL)
+                          - date (TEXT)
+                        """
+                    
+                    # Try to generate questions with the new instance
+                    new_questions = new_instance.generate_starter_questions(schema, 5)
+                    
+                    response_data["steps"].append({
+                        "step": "Generate questions with new instance",
+                        "status": "success",
+                        "questions": new_questions
+                    })
+                    
+                    if not response_data["final_status"] or response_data["final_status"] != "success":
+                        response_data["final_status"] = "success"
+                        response_data["final_questions"] = new_questions
+                
+            except Exception as e:
+                app.logger.error(f"[DEBUG] Error with new Talk2SQL instance: {str(e)}")
+                response_data["steps"].append({
+                    "step": "Try new Talk2SQL instance",
+                    "status": f"failed: {str(e)}"
+                })
+        
+        # Final fallback: Try the direct implementation
+        if not response_data["final_questions"]:
+            try:
+                app.logger.info("[DEBUG] Trying direct implementation")
+                response_data["steps"].append({
+                    "step": "Try direct implementation",
+                    "status": "attempting"
+                })
+                
+                # If no schema was provided, use a simple test schema
+                if not schema:
+                    schema = """
+                    Table: users
+                      - id (INTEGER)
+                      - name (TEXT)
+                      - email (TEXT)
+                    
+                    Table: orders
+                      - id (INTEGER)
+                      - user_id (INTEGER)
+                      - amount (REAL)
+                      - date (TEXT)
+                    """
+                
+                # Extract table names
+                table_names = re.findall(r"Table: (\w+)", schema)
+                
+                # Generate questions directly
+                direct_questions = [
+                    f"How many records are in the {table_names[0]} table?",
+                    f"What are all the columns in the {table_names[0]} table?",
+                ]
+                
+                if len(table_names) > 1:
+                    direct_questions.append(f"Show me the relationship between {table_names[0]} and {table_names[1]}")
+                    
+                direct_questions.extend([
+                    "What tables are in this database?",
+                    "Show me the first 10 records from the main table"
+                ])
+                
+                response_data["steps"].append({
+                    "step": "Generate questions directly",
+                    "status": "success",
+                    "questions": direct_questions
+                })
+                
+                if not response_data["final_status"] or response_data["final_status"] != "success":
+                    response_data["final_status"] = "success"
+                    response_data["final_questions"] = direct_questions
+                    
+            except Exception as e:
+                app.logger.error(f"[DEBUG] Error with direct implementation: {str(e)}")
+                response_data["steps"].append({
+                    "step": "Try direct implementation",
+                    "status": f"failed: {str(e)}"
+                })
+        
+        # If we still don't have questions, provide a default set
+        if not response_data["final_questions"]:
+            response_data["final_status"] = "fallback"
+            response_data["final_questions"] = [
+                "What tables are in this database?",
+                "Show me the first 10 records from the main table",
+                "What is the count of records in each table?",
+                "What are the most common values in the main columns?",
+                "Show me any relationships between tables"
+            ]
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        app.logger.error(f"[DEBUG] General error in debug endpoint: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
 #prod
 if __name__ == '__main__':
     # Verify query history file location
@@ -2371,4 +3218,4 @@ if __name__ == '__main__':
 #local testing
 # if __name__ == '__main__':
 #     # port = int(os.environ.get("PORT", 5000))
-#     app.run(debug=False, host='localhost', port=8000) 
+#     app.run(debug=False, host='localhost', port=8000) s

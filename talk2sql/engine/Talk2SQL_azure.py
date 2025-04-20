@@ -1588,39 +1588,86 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             The Toronto Raptors have the highest average attendance in the NBA with 18,622 fans per game, this was inferred using the table game_info and the column attendance.
             </example>
 
-            The user asked: "{question}"
+            The user asked: "${question}"
             
-            I ran the following SQL query:
-            {sql}
+            I ran the following SQL query: ${sql}
             
-            The query returned a dataframe with {len(df)} rows and {len(df.columns)} columns.
-            Column names: {', '.join(df.columns)}
+            The query returned a dataframe with ${len(df)} rows and ${len(df.columns)} columns.
+            Column names: ${', '.join(df.columns)}
             
             Here's the dataframe:
-            {df.to_string()}
-
-            Assistant:
+            ${df.head(10).to_string()}
             """
             
-            # Create the messages for the prompt
-            messages = [
-                {"role": "system", "content": "You are a helpful AI that summarizes data and answers questions."},
-                {"role": "user", "content": prompt}
+            prompt = [
+                self.system_message(prompt),
+                self.user_message("Please provide a concise summary of this data to answer the user's question.")
             ]
             
-            # Use the client to generate the summary
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",  # Using a default model, can be configured
-                messages=messages,
-                temperature=0.3,
-                max_tokens=400
-            )
+            # Get response from OpenAI
+            summary = self.submit_prompt(prompt)
             
-            summary = response.choices[0].message.content
             return summary
             
         except Exception as e:
-            print(f"Error generating summary: {e}")
+            print(f"Error generating data summary: {e}")
             import traceback
             traceback.print_exc()
-            return "Sorry, I couldn't generate a summary of the data."
+            return f"Error generating summary: {str(e)}"
+    
+    def generate_starter_questions(self, schema: str, n=10) -> List[dict]:
+        """
+        Generate starter questions and visualization suggestions based on database schema.
+        
+        Args:
+            schema: Database schema information
+            n: Number of starter questions to generate
+            
+        Returns:
+            List of question-visualization pairs as dictionaries
+        """
+        prompt = [
+            self.system_message(
+                f"You are a data analyst helping users explore a database. "
+                f"The database has the following schema:\n\n{schema}"
+            ),
+            self.user_message(
+                f"Generate {n} natural starter questions with corresponding visualization suggestions to help users explore this database. "
+                f"Each question should be answerable with SQL and should provide insights about the data. "
+                f"Make questions specific to the tables and columns in the schema.\n\n"
+                f"For each question, also suggest an appropriate visualization type that would best display the results.\n\n"
+                f"Return the output as a JSON array where each item has a 'question' field"
+                "An example output is [{'question': 'Treemap of Salary breakdown by team and then by position'}]"
+            )
+        ]
+        
+        response = self.submit_prompt(prompt)
+        
+        # Try to parse as JSON
+        try:
+            import json
+            # Find JSON content (may be surrounded by markdown or other text)
+            import re
+            json_match = re.search(r'(\[.*\])', response.replace('\n', ' '), re.DOTALL)
+            if json_match:
+                questions_data = json.loads(json_match.group(1))
+            else:
+                # If no JSON array found, try to parse the whole response
+                questions_data = json.loads(response)
+                
+            # Ensure we have the right format
+            if isinstance(questions_data, list):
+                # Clean up and standardize the format
+                cleaned_data = []
+                for item in questions_data:
+                    if isinstance(item, dict) and 'question' in item:
+                        cleaned_item = {
+                            'question': item['question'],
+                        }
+                        cleaned_data.append(cleaned_item)
+                return cleaned_data[:n]
+            
+        except Exception as e:
+            # Fallback to simple text parsing if JSON parsing fails
+            questions = [q.strip() for q in response.strip().split("\n") if q.strip()]
+            return [{'question': q} for q in questions[:n]]

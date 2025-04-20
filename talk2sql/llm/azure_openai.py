@@ -256,3 +256,36 @@ class AzureOpenAILLM(Talk2SQLBase):
         
         # Limit to n questions
         return questions[:n]
+        
+    def generate_starter_questions(self, schema: str, n=5) -> List[str]:
+        """
+        Generate starter questions based on database schema.
+        
+        Args:
+            schema: Database schema information
+            n: Number of starter questions to generate
+            
+        Returns:
+            List of starter questions
+        """
+        prompt = [
+            self.system_message(
+                f"You are a data analyst helping users explore a database. "
+                f"The database has the following schema:\n\n{schema}"
+            ),
+            self.user_message(
+                f"Generate {n} natural starter questions that would help a user begin exploring this database. "
+                f"Focus on common data exploration queries that would provide insights about the data. "
+                f"Each question should be answerable with SQL. "
+                f"Make questions specific to the tables and columns in the schema. "
+                f"Return only the questions, one per line."
+            )
+        ]
+        
+        response = self.submit_prompt(prompt)
+        
+        # Split into list of questions
+        questions = [q.strip() for q in response.strip().split("\n") if q.strip()]
+        
+        # Limit to n questions
+        return questions[:n]
