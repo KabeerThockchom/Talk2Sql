@@ -10,9 +10,9 @@ import numpy as np
 import base64
 import hashlib
 from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
-from Talk2SQL.engine import Talk2SQLAzure
-# from Talk2SQL.engine import Talk2SQLAnthropic
-from Talk2SQL.utils import format_sql_with_xml_tags, extract_content_from_xml_tags
+from talk2sql.engine import Talk2SQLAzure
+# from talk2sql.engine import Talk2SQL_anthropic
+from talk2sql.utils import format_sql_with_xml_tags, extract_content_from_xml_tags
 import groq
 import threading
 import sqlite3
