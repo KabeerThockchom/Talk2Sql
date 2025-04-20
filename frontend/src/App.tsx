@@ -1957,36 +1957,33 @@ function App() {
             <div className="max-w-6xl mx-auto mb-3">
               <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400 mb-2 flex items-center justify-between">
                 <div>
-                  Suggested Questions: {starterQuestions?.length > 0 ? `(${starterQuestions.length})` : '(Loading...)'}
+                  Suggested Questions: {starterQuestions?.length > 0 ? `(${starterQuestions.length})` : ''}
                 </div>
                 <button 
                   onClick={async () => {
                     try {
-                      console.log("Testing starter questions API for:", selectedDb);
-                      // First try the debug endpoint
-                      const debugResponse = await axios.get(`https://text2sql.fly.dev/debug_starter_questions?db_path=${encodeURIComponent(selectedDb)}`);
-                      console.log("Debug starter questions response:", debugResponse.data);
+                      console.log("Generating new questions for:", selectedDb);
                       
-                      // Then try the regular endpoint again with the debug flag
-                      const testResponse = await axios.get(`https://text2sql.fly.dev/starter_questions?t=${Date.now()}&debug=true&count=10&db_path=${encodeURIComponent(selectedDb)}`);
-                      console.log("Direct starter questions response:", testResponse.data);
+                      // Add a timestamp to prevent caching
+                      const timestamp = Date.now();
+                      const response = await axios.get(`https://text2sql.fly.dev/starter_questions?t=${timestamp}&force_new=true&count=10&db_path=${encodeURIComponent(selectedDb)}`);
+                      console.log("New questions response:", response.data);
                       
-                      if (testResponse.data.status === 'success' && 
-                          Array.isArray(testResponse.data.questions) && 
-                          testResponse.data.questions.length > 0) {
-                        setStarterQuestions(testResponse.data.questions);
-                        alert("Starter questions updated! Check console for details.");
+                      if (response.data.status === 'success' && 
+                          Array.isArray(response.data.questions) && 
+                          response.data.questions.length > 0) {
+                        setStarterQuestions(response.data.questions);
                       } else {
-                        alert("API call succeeded but didn't return valid questions. Check console for details.");
+                        alert("Failed to generate new questions. Check console for details.");
                       }
                     } catch (error) {
-                      console.error("Error testing starter questions:", error);
-                      alert("Error testing starter questions. Check console for details.");
+                      console.error("Error generating new questions:", error);
+                      alert("Error generating new questions. Check console for details.");
                     }
                   }}
                   className="text-xs text-primary underline"
                 >
-                  Debug Questions
+                  Generate New Questions
                 </button>
               </div>
               

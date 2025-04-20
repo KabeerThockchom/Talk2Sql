@@ -1615,7 +1615,7 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             traceback.print_exc()
             return f"Error generating summary: {str(e)}"
     
-    def generate_starter_questions(self, schema: str, n=10) -> List[dict]:
+    def generate_starter_questions(self, schema: str, n=5) -> List[dict]:
         """
         Generate starter questions and visualization suggestions based on database schema.
         
@@ -1624,7 +1624,7 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             n: Number of starter questions to generate
             
         Returns:
-            List of question-visualization pairs as dictionaries
+            List of question pairs as dictionaries
         """
         prompt = [
             self.system_message(
@@ -1636,7 +1636,7 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
                 f"Each question should be answerable with SQL and should provide insights about the data. "
                 f"Make questions specific to the tables and columns in the schema.\n\n"
                 f"For each question, also suggest an appropriate visualization type that would best display the results.\n\n"
-                f"Return the output as a JSON array where each item has a 'question' field"
+                f"Return the output as a JSON array where each item has a 'question' field, each question should have a visualization suggestion"
                 "An example output is [{'question': 'Treemap of Salary breakdown by team and then by position'}]"
             )
         ]
