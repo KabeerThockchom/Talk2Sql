@@ -1,4 +1,4 @@
-# Talk2SQL
+# Text2SQL
 
 A powerful natural language to SQL query tool with visualization capabilities and voice assistant features.
 
