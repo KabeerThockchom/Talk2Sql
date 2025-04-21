@@ -7,7 +7,8 @@ A powerful natural language to SQL query tool with visualization capabilities an
 Talk2SQL lets you query databases using plain English. It translates natural language questions into SQL, executes the queries, and displays the results with visualizations. The app includes a voice assistant for hands-free operation and maintains a history of all queries for easy reference.
 
 ## Demo
-[Watch Demo Video](https://youtu.be/5ViUjd_1v2Q)
+
+https://github.com/user-attachments/assets/d140eff1-50b6-4d06-8f5a-2a835bd16be0
 
 ## Setup
 
