@@ -1340,6 +1340,7 @@ class Talk2SQLAzure(QdrantVectorStore, AzureOpenAILLM):
             f"\n<config>\n{{ \"used_memory\": {str(used_memory).lower()} }}\n</config>"
             "\n\nThe config section should indicate whether you used memory/context from previous questions."
             "config set to true if you created the query based on the previous questions and their sql, false if you did not use the previous questions and their sql and you created the query based on the schema and documentation alone"
+            "The user may ask visuzaliton in their question, example: 'Salary breakdown by team and then by position in a treemap diagram', your job is to generate the sql query that will pull the data best for the creating this visualization from the database"
         )
         
         if schema_text:

@@ -59,7 +59,7 @@ config = {
     # Retry settings
     "max_retry_attempts": 3,
     "save_query_history": True,
-    "history_db_path": os.path.join(DB_FOLDER, "query_history.sqlit"),  # Store query history in databases folder
+    "history_db_path": os.path.join(DB_FOLDER, "query_history.sqlite"),  # Store query history in databases folder
     
     # General settings
     "debug_mode": True,
@@ -1007,7 +1007,48 @@ def generate_data_summary(question, result):
 @app.route('/history', methods=['GET'])
 def get_history():
     try:
-        history = Talk2SQL.get_query_history(limit=20)
+        # Get filter parameters from request
+        time_range = request.args.get('time_range', 'all')  # all | day | week | month
+        status_filter = request.args.get('status', 'all')   # all | success | failed
+        
+        print(f"DEBUG: history request with time_range={time_range}, status_filter={status_filter}")
+        
+        # Get full history first
+        history = Talk2SQL.get_query_history()
+        print(f"DEBUG: Raw history returned from Talk2SQL.get_query_history(): {len(history) if history else 0} items")
+        
+        if not history:
+            print("DEBUG: No history found from Talk2SQL.get_query_history()")
+            # Return empty array for frontend to handle
+            return jsonify({"status": "success", "history": []})
+        
+        # Apply time filter if specified
+        if time_range != "all":
+            now = datetime.datetime.now()
+            filtered_history = []
+            for item in history:
+                try:
+                    ts = item.get("timestamp", "")
+                    if ts:
+                        item_date = _parse_iso(ts)
+                        # Filter based on time range
+                        delta = {"day": 1, "week": 7, "month": 30}[time_range]
+                        if (now - item_date).days <= delta:
+                            filtered_history.append(item)
+                except Exception as e:
+                    print(f"Error filtering by time: {e}")
+            history = filtered_history
+            print(f"DEBUG: After time filtering: {len(history)} items")
+            
+        # Apply status filter if specified
+        if status_filter != "all":
+            filtered_history = []
+            for item in history:
+                success_status = item.get("success", False)
+                if (status_filter == "success" and success_status) or (status_filter == "failed" and not success_status):
+                    filtered_history.append(item)
+            history = filtered_history
+            print(f"DEBUG: After status filtering: {len(history)} items")
         
         # Enhance history items with additional data if available
         enhanced_history = []
@@ -1069,7 +1110,7 @@ def get_history():
                         import base64
                         history_item["visualization"] = base64.b64encode(item.get("visualization")).decode('utf-8')
                     elif not isinstance(item.get("visualization"), str):
-                        serializable_item['visualization'] = json.dumps(str(item['visualization']))
+                        history_item['visualization'] = json.dumps(str(item['visualization']))
                     else:
                         history_item["visualization"] = item['visualization']
                 except Exception as e:
@@ -1082,6 +1123,7 @@ def get_history():
                 
             enhanced_history.append(history_item)
             
+        print(f"DEBUG: Final enhanced history size: {len(enhanced_history)} items")
         return jsonify({"status": "success", "history": enhanced_history})
     except Exception as e:
         print(f"Error getting history: {e}")

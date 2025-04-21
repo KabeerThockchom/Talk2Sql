@@ -52,9 +52,14 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onBack, queryClient })
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all');
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['history'],
+    queryKey: ['history', timeFilter, statusFilter],
     queryFn: async () => {
-      const response = await axios.get('https://text2sql.fly.dev/history');
+      const response = await axios.get('https://text2sql.fly.dev/history', {
+        params: {
+          time_range: timeFilter,
+          status: statusFilter
+        }
+      });
       return response.data;
     }
   });
@@ -153,38 +158,12 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onBack, queryClient })
     }
   };
 
-  // Filter history items based on search query and filters
+  // Filter history items based on search query only (time and status are handled by the backend)
   const filteredHistory = data?.history?.filter((item: HistoryItem) => {
     // Filter by search query
     if (searchQuery && !item.question.toLowerCase().includes(searchQuery.toLowerCase())) {
       return false;
     }
-    
-    // Filter by status
-    if (statusFilter === 'success' && !item.success) {
-      return false;
-    }
-    if (statusFilter === 'failed' && item.success) {
-      return false;
-    }
-    
-    // Filter by time
-    if (timeFilter !== 'all') {
-      const now = new Date();
-      const itemDate = new Date(item.timestamp);
-      const diffDays = Math.floor((now.getTime() - itemDate.getTime()) / (1000 * 60 * 60 * 24));
-      
-      if (timeFilter === 'day' && diffDays > 1) {
-        return false;
-      }
-      if (timeFilter === 'week' && diffDays > 7) {
-        return false;
-      }
-      if (timeFilter === 'month' && diffDays > 30) {
-        return false;
-      }
-    }
-    
     return true;
   }) || [];
 
